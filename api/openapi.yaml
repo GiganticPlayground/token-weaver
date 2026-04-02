@@ -1,0 +1,464 @@
+openapi: 3.0.3
+info:
+  title: User Management API
+  description: REST API for performing CRUD operations on users
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+
+servers:
+  - url: http://localhost:3000
+    description: Local server
+  - url: https://api.example.com
+    description: Production server
+  - url: https://api-dev.example.com
+    description: Development server
+
+tags:
+  - name: Users
+    description: Operations on users
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      tags:
+        - System
+      operationId: getHealth
+      x-eov-operation-id: getHealth
+      x-eov-operation-handler: healthController
+      security: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheck'
+  /users:
+    get:
+      tags:
+        - Users
+      summary: Get all users
+      description: Returns a list of all registered users
+      operationId: getUsers
+      x-eov-operation-id: getUsers
+      x-eov-operation-handler: userController
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of users to return
+          required: false
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+        - name: page
+          in: query
+          description: Page number for pagination
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+      responses:
+        '200':
+          description: User list retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  total:
+                    type: integer
+                    description: Total number of users
+                  page:
+                    type: integer
+                    description: Current page
+                  limit:
+                    type: integer
+                    description: Limit per page
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      tags:
+        - Users
+      summary: Create a new user
+      description: Creates a new user in the system
+      operationId: createUser
+      x-eov-operation-id: createUser
+      x-eov-operation-handler: userController
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users/{id}:
+    get:
+      tags:
+        - Users
+      summary: Get a user by ID
+      description: Returns a specific user based on their ID
+      operationId: getUserById
+      x-eov-operation-id: getUserById
+      x-eov-operation-handler: userController
+      parameters:
+        - name: id
+          in: path
+          description: ID of the user to retrieve
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      tags:
+        - Users
+      summary: Update a complete user
+      description: Updates all data of an existing user
+      operationId: updateUser
+      x-eov-operation-id: updateUser
+      x-eov-operation-handler: userController
+      parameters:
+        - name: id
+          in: path
+          description: ID of the user to update
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    patch:
+      tags:
+        - Users
+      summary: Partially update a user
+      description: Updates only the specified fields of a user
+      operationId: partialUpdateUser
+      x-eov-operation-id: partialUpdateUser
+      x-eov-operation-handler: userController
+      parameters:
+        - name: id
+          in: path
+          description: ID of the user to update
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPartial'
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      tags:
+        - Users
+      summary: Delete a user
+      description: Deletes a user from the system
+      operationId: deleteUser
+      x-eov-operation-id: deleteUser
+      x-eov-operation-handler: userController
+      parameters:
+        - name: id
+          in: path
+          description: ID of the user to delete
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: User deleted successfully
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication. Use 'dev-local-key-12345' for local development.
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique user identifier
+          example: '550e8400-e29b-41d4-a716-446655440000'
+        name:
+          type: string
+          description: Full name of the user
+          example: 'John Doe'
+          minLength: 1
+          maxLength: 100
+        age:
+          type: integer
+          description: Age of the user in years
+          example: 30
+          minimum: 0
+          maximum: 150
+        address:
+          type: string
+          description: Physical address of the user
+          example: '123 Main Street, Downtown'
+          maxLength: 200
+        email:
+          type: string
+          format: email
+          description: Email address of the user
+          example: 'john.doe@example.com'
+        phone:
+          type: string
+          description: Phone number of the user
+          example: '+1 555 123 4567'
+          pattern: '^\+?[1-9]\d{1,14}$'
+        createdAt:
+          type: string
+          format: date-time
+          description: Date and time of user creation
+          example: '2025-01-15T10:30:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: Date and time of last update
+          example: '2025-01-20T15:45:00Z'
+      required:
+        - id
+        - name
+        - email
+
+    UserCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Full name of the user
+          example: 'John Doe'
+          minLength: 1
+          maxLength: 100
+        age:
+          type: integer
+          description: Age of the user in years
+          example: 30
+          minimum: 0
+          maximum: 150
+        address:
+          type: string
+          description: Physical address of the user
+          example: '123 Main Street, Downtown'
+          maxLength: 200
+        email:
+          type: string
+          format: email
+          description: Email address of the user
+          example: 'john.doe@example.com'
+        phone:
+          type: string
+          description: Phone number of the user
+          example: '+1 555 123 4567'
+          pattern: '^\+?[1-9]\d{1,14}$'
+      required:
+        - name
+        - email
+
+    UserUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Full name of the user
+          example: 'John Doe'
+          minLength: 1
+          maxLength: 100
+        age:
+          type: integer
+          description: Age of the user in years
+          example: 30
+          minimum: 0
+          maximum: 150
+        address:
+          type: string
+          description: Physical address of the user
+          example: '123 Main Street, Downtown'
+          maxLength: 200
+        email:
+          type: string
+          format: email
+          description: Email address of the user
+          example: 'john.doe@example.com'
+        phone:
+          type: string
+          description: Phone number of the user
+          example: '+1 555 123 4567'
+          pattern: '^\+?[1-9]\d{1,14}$'
+      required:
+        - name
+        - email
+
+    UserPartial:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Full name of the user
+          example: 'John Doe'
+          minLength: 1
+          maxLength: 100
+        age:
+          type: integer
+          description: Age of the user in years
+          example: 30
+          minimum: 0
+          maximum: 150
+        address:
+          type: string
+          description: Physical address of the user
+          example: '123 Main Street, Downtown'
+          maxLength: 200
+        email:
+          type: string
+          format: email
+          description: Email address of the user
+          example: 'john.doe@example.com'
+        phone:
+          type: string
+          description: Phone number of the user
+          example: '+1 555 123 4567'
+          pattern: '^\+?[1-9]\d{1,14}$'
+
+    HealthCheck:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Current health status of the service
+          example: 'OK'
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the health check was performed
+          example: '2025-01-15T10:30:00Z'
+      required:
+        - status
+        - timestamp
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Error code
+          example: 'USER_NOT_FOUND'
+        message:
+          type: string
+          description: Descriptive error message
+          example: 'The requested user does not exist'
+        details:
+          type: array
+          items:
+            type: string
+          description: Additional details about the error
+      required:
+        - code
+        - message

@@ -1,0 +1,22 @@
+{
+  "apiKeys": {
+    "dev-api-key-12345": {
+      "name": "Development Key",
+      "description": "API key for development environment",
+      "createdAt": "2024-01-01T00:00:00Z",
+      "active": true
+    },
+    "prod-api-key-67890": {
+      "name": "Production Key",
+      "description": "API key for production services",
+      "createdAt": "2024-01-01T00:00:00Z",
+      "active": true
+    },
+    "deprecated-key-old": {
+      "name": "Deprecated Key",
+      "description": "Old API key - deactivated",
+      "createdAt": "2023-01-01T00:00:00Z",
+      "active": false
+    }
+  }
+}
