@@ -38,7 +38,7 @@ app.use(
   }),
 );
 
-app.use(createOpenApiValidatorMiddleware(apiSpec));
+app.use(createOpenApiValidatorMiddleware(apiSpecPath));
 app.use(errorHandlerMiddleware);
 
 app.listen(config.PORT, () => {

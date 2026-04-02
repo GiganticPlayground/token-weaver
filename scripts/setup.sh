@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenAPI-First API Setup Script
+# Token Weaver Setup Script
 # This script automates the complete setup process from OpenAPI spec to running Docker container
 
 set -e  # Exit on any error
@@ -38,7 +38,7 @@ print_header() {
 }
 
 # Check if OpenAPI spec exists
-print_header "OpenAPI-First API Setup"
+print_header "Token Weaver Setup"
 
 if [ ! -f "api/openapi.yaml" ]; then
     print_error "OpenAPI specification not found!"

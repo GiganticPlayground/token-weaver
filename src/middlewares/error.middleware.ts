@@ -10,10 +10,8 @@ interface ExpressHandler<T extends Error> {
 }
 
 export const errorHandlerMiddleware: ExpressHandler<CustomError> = (err, _req, res, _next) => {
-  // format error
-  console.error('OpenAPI Validator Error:', err);
+  console.error('Request error:', err);
 
-  // Handle validation errors
   if (err.status === 400 && err.errors) {
     return res.status(400).json({
       message: 'Validation error',
@@ -21,23 +19,22 @@ export const errorHandlerMiddleware: ExpressHandler<CustomError> = (err, _req, r
     });
   }
 
-  // Handle authentication/authorization errors
-  if (err.status === 401) {
-    return res.status(401).json({
-      message: err.message || 'Unauthorized',
-      code: 'AUTHENTICATION_FAILED',
+  if (err.status && err.status >= 400 && err.status < 500) {
+    return res.status(err.status).json({
+      message: err.message || 'Request failed',
+      ...(err.name ? { code: err.name } : {}),
+      ...(err.errors ? { errors: err.errors } : {}),
     });
   }
 
-  if (err.status === 403) {
-    return res.status(403).json({
-      message: err.message || 'Forbidden',
-      code: 'AUTHORIZATION_FAILED',
+  if (err.status === 503) {
+    return res.status(503).json({
+      message: err.message || 'Service unavailable',
+      code: err.name || 'SERVICE_UNAVAILABLE',
     });
   }
 
-  // Handle other errors
-  return res.status(err.status ?? 500).json({
+  return res.status(500).json({
     message: err.message || 'Internal server error',
     ...(err.errors ? { errors: err.errors } : {}),
   });

@@ -1,317 +1,118 @@
-# OpenAPI-First API Starter
+# Token Weaver
 
-An OpenAPI-first development approach for building type-safe REST APIs with automatic code generation, validation, and Docker deployment.
+Token Weaver is a configurable authentication gateway that accepts inbound credentials, applies a configured strategy, and returns a signed JWT on success.
 
-## Overview
+It is intentionally narrow in scope:
+- Token Weaver issues JWTs
+- downstream services validate JWTs
+- Token Weaver does not require a downstream user record to exist before issuing a token
 
-This project provides a streamlined workflow where you can:
+## Supported Strategies
 
-1. Define your API using OpenAPI 3.0 specification
-2. Automatically generate TypeScript types and controller scaffolds
-3. Build and deploy a fully validated, production-ready API in Docker
+### Direct
 
-## Features
+Matches a configured credential locally and translates it directly into JWT claims. No upstream call is made.
 
-- **OpenAPI-First Development** - Define your API spec once, generate everything else
-- **Automatic Type Generation** - TypeScript types generated from OpenAPI spec
-- **Controller Scaffolding** - Auto-generate typed controller stubs
-- **Runtime Validation** - Request/response validation against OpenAPI spec
-- **Docker Ready** - Multi-stage build for optimized production containers
-- **Type Safety** - End-to-end type safety from spec to implementation
-- **Code Quality** - ESLint and Prettier included
+Use this for:
+- machine-to-machine clients
+- static device credentials
+- bounded client sets known at deploy time
 
-## Prerequisites
+### Delegated
 
-- **Node.js** 24.x or higher
-- **Docker** and **Docker Compose**
-- **npm**
+Transforms the inbound request, forwards it to an upstream HTTP service, evaluates the upstream response, and issues a JWT if the configured success condition passes.
 
-# 🧩 Using This Template Repository
+Use this for:
+- existing external auth systems
+- player or account systems that decide authentication dynamically
+- flows where the subject record may not exist until the upstream system handles the request
 
-This repository is configured as a **GitHub Template Repository**, allowing you to quickly create a new project with the same structure, configuration, and files — without copying the entire commit history.
+## Endpoints
 
----
+- `POST /auth`
+- `GET /.well-known/jwks.json`
+- `GET /health`
+- `GET /api-docs`
 
-## 🚀 How to Create a New Repository from This Template
-
-### Option 1 — Using GitHub Web Interface
-
-1. Go to this repository’s main page on GitHub.
-2. Click the green button **“Use this template”** at the top right of the page.
-3. Select **“Create a new repository.”**
-4. Enter the **name** of your new repository.
-5. Choose whether it should be **Public** or **Private.**
-6. (Optional) Add a **description** and adjust settings as needed.
-7. Click **“Create repository from template.”**
-
-That’s it! 🎉  
-Your new repository will now include all the files, folders, and configuration from this template — ready for customization.
-
----
-
-### Option 2 — Using GitHub CLI (if you prefer the terminal)
-
-You can use the [GitHub CLI](https://cli.github.com/) to create a new repo from the template:
-
-````bash
-# Syntax
-gh repo create <new-repo-name> --template <owner>/<template-repo>
-
-# Example
-gh repo create my-new-project --template GiganticPlayground/openapi-first-template
-
+Routes are bound through the OpenAPI spec in [api/openapi.yaml](/Users/daniellmorris/work/gigaplay/os/token-weaver/api/openapi.yaml) via `express-openapi-validator`.
 
 ## Quick Start
 
-### 1. Add Your OpenAPI Specification
-
-Copy your `openapi.yaml` file to the `api/` directory:
-
-```bash
-cp your-api-spec.yaml api/openapi.yaml
-````
-
-### 2. Install Dependencies
+### 1. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Run Complete Setup
-
-This single command will:
-
-- Generate TypeScript types from your OpenAPI spec
-- Generate controller scaffolds
-- Compile TypeScript to JavaScript
-- Build the Docker image
-- Start the container
+### 2. Create config
 
 ```bash
-npm run setup
+mkdir -p config
+cp config/token-weaver.yaml.example config/token-weaver.yaml
 ```
 
-### 4. Access Your API
+### 3. Provide a signing key
 
-Your API is now running at:
+Set one of:
+- `TOKEN_WEAVER_PRIVATE_KEY`
+- `TOKEN_WEAVER_PRIVATE_KEY_PATH`
 
-- **API Endpoint**: http://localhost:3000
-- **Swagger UI**: http://localhost:3000/api-docs
-- **Health Check**: http://localhost:3000/health
+The key must be an RSA private key in PEM format.
 
-## Manual Setup (Step-by-Step)
-
-If you prefer to run each step individually:
-
-### Generate TypeScript Types
+### 4. Run locally
 
 ```bash
-npm run gen-types
+npm run dev
 ```
 
-Generates `src/types/schema.d.ts` from `api/openapi.yaml`
+## Configuration
 
-### Generate Controller Scaffolds
+Token Weaver loads strategy config from:
+- `TOKEN_WEAVER_CONFIG_PATH`
+- default: `config/token-weaver.yaml`
 
-```bash
-npm run gen-controllers
-```
+An example file is provided at [config/token-weaver.yaml.example](/Users/daniellmorris/work/gigaplay/os/token-weaver/config/token-weaver.yaml.example).
 
-Creates controller files in `src/controllers/` based on OpenAPI operations
-
-### Build TypeScript
-
-```bash
-npm run build
-```
-
-Compiles TypeScript source to JavaScript in `dist/` folder
-
-### Build Docker Image
-
-```bash
-npm run docker:build
-# or
-docker-compose build
-```
-
-### Start Docker Container
-
-```bash
-npm run docker:up
-# or
-docker-compose up -d
-```
-
-## Available Scripts
-
-### Development
-
-- `npm run dev` - Start development server with hot reload
-- `npm run gen-types` - Generate TypeScript types from OpenAPI spec
-- `npm run gen-controllers` - Generate controller scaffolds
-- `npm run generate` - Run both gen-types and gen-controllers
-
-### Production
-
-- `npm run build` - Compile TypeScript to JavaScript
-- `npm run start` - Run compiled production code (used in Docker)
-- `npm run setup` - Complete automated setup (generate → build → docker)
-
-### Docker
-
-- `npm run docker:build` - Build Docker image
-- `npm run docker:up` - Start container in background
-- `npm run docker:down` - Stop and remove container
-- `npm run docker:logs` - View container logs
-
-### Code Quality
-
-- `npm run lint` - Check code for linting errors
-- `npm run lint:fix` - Fix auto-fixable linting errors
-- `npm run format` - Format code with Prettier
-- `npm run format:check` - Check code formatting
-- `npm run type-check` - Run TypeScript type checking
-- `npm run validate` - Run type-check + lint + format-check
-
-## Project Structure
-
-```
-.
-├── api/
-│   └── openapi.yaml              # OpenAPI 3.0 specification
-├── src/
-│   ├── index.ts                  # Application entry point
-│   ├── config/                   # Configuration and env validation
-│   ├── controllers/              # Auto-generated & manual controllers
-│   ├── middlewares/              # Express middlewares (OpenAPI, error handling)
-│   ├── types/
-│   │   ├── schema.d.ts          # Auto-generated TypeScript types
-│   │   └── api-helpers.ts       # Type utilities
-│   └── utils/                    # Utilities (logger, etc.)
-├── scripts/
-│   ├── generate-controllers.js   # Controller generation script
-│   └── setup.sh                  # Automated setup script
-├── dist/                         # Compiled JavaScript (gitignored)
-├── Dockerfile                    # Multi-stage production build
-├── docker-compose.yml            # Docker Compose configuration
-└── package.json                  # Dependencies and scripts
-```
-
-## OpenAPI Requirements
-
-Your `openapi.yaml` must include these custom extensions for proper code generation:
-
-```yaml
-paths:
-  /users:
-    get:
-      x-eov-operation-id: getUsers # Unique operation identifier
-      x-eov-operation-handler: userController # Controller file name
-      summary: Get all users
-      # ... rest of operation definition
-```
-
-### Required Extensions
-
-- **x-eov-operation-id**: Unique identifier for the operation (becomes function name)
-- **x-eov-operation-handler**: Controller file name (without .ts extension)
-
-## Development Workflow
-
-1. **Edit OpenAPI Spec** - Modify `api/openapi.yaml` to add/update endpoints
-2. **Regenerate Code** - Run `npm run generate` to update types and controllers
-3. **Implement Logic** - Add business logic to generated controller functions
-4. **Test Locally** - Run `npm run dev` for local development with hot reload
-5. **Validate** - Run `npm run validate` to check types, linting, and formatting
-6. **Deploy** - Run `npm run setup` to rebuild and redeploy in Docker
+Core config concepts:
+- `type`: `direct` or `delegated`
+- `route`: request path and optional header/query discriminators used to select a strategy
+- `inbound_auth`: optional `api_key`, `bearer`, or `none` gate applied before strategy execution
+- `credentials`: direct-strategy credential list
+- `upstream`: delegated-strategy target, auth, timeout, and request mapping
+- `response_mapping`: delegated-strategy success condition and claim extraction
+- `jwt`: issuer and TTL for tokens issued by that strategy
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and configure as needed:
+- `PORT`: HTTP port, default `3000`
+- `NODE_ENV`: `development`, `test`, or `production`
+- `TOKEN_WEAVER_CONFIG_PATH`: path to YAML or JSON strategy config
+- `TOKEN_WEAVER_PRIVATE_KEY`: RSA private key PEM content
+- `TOKEN_WEAVER_PRIVATE_KEY_PATH`: path to RSA private key PEM file
+- `TOKEN_WEAVER_KID`: JWKS key id, default `token-weaver-key`
+
+## Development
+
+Useful commands:
 
 ```bash
-cp .env.example .env
-```
-
-Available variables:
-
-- `PORT` - Server port (default: 3000)
-- `NODE_ENV` - Environment (development/production)
-
-## How It Works
-
-### 1. Type Generation
-
-Uses `openapi-typescript` to convert OpenAPI schemas into TypeScript types, providing full type safety across your application.
-
-### 2. Controller Generation
-
-Custom script reads your OpenAPI spec and generates Express controller functions with proper typing using the generated schema types.
-
-### 3. Runtime Validation
-
-`express-openapi-validator` middleware validates all incoming requests and outgoing responses against your OpenAPI specification at runtime.
-
-### 4. Type-Safe Handlers
-
-Controller functions use helper types (`ApiRequest<T>`, `ApiResponse<T>`) that extract the correct types for path params, query params, request body, and response body for each operation.
-
-### 5. Docker Deployment
-
-Multi-stage Dockerfile compiles TypeScript in a builder stage, then creates a minimal production image with only compiled code and production dependencies.
-
-## Type Safety Example
-
-```typescript
-import { ApiRequest, ApiResponse } from '../types/api-helpers.js';
-
-// Fully typed request and response based on OpenAPI operation
-export const getUserById = async (
-  req: ApiRequest<'getUserById'>,
-  res: ApiResponse<'getUserById'>,
-) => {
-  const userId = req.params.id; // Type: string (from path params)
-
-  // Response type matches OpenAPI schema
-  res.status(200).json({
-    id: userId,
-    name: 'John Doe',
-    email: 'john@example.com',
-  });
-};
-```
-
-## Troubleshooting
-
-### Port Already in Use
-
-If port 3000 is already in use:
-
-1. Stop the conflicting service
-2. Or change the port in `.env` and `docker-compose.yml`
-
-### Docker Build Fails
-
-Ensure you have enough disk space and Docker is running:
-
-```bash
-docker system prune  # Clean up unused Docker resources
-```
-
-### Type Errors After Updating OpenAPI
-
-Regenerate types and controllers:
-
-```bash
-npm run generate
+npm run dev
 npm run type-check
+npm run lint
+npm run format:check
+npm run build
 ```
 
-## Contributing
+## Implementation Layout
 
-This is a proof-of-concept starter template. Feel free to customize the code generation scripts, add additional automation, or extend the functionality.
+- [src/controllers/authController.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/controllers/authController.ts): auth and JWKS endpoints
+- [src/services/token-weaver.service.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/services/token-weaver.service.ts): strategy execution and request orchestration
+- [src/services/jwt.service.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/services/jwt.service.ts): JWT signing and JWKS generation
+- [src/config/token-weaver.config.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/config/token-weaver.config.ts): strategy config loading and validation
+- [src/utils/path-expression.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/utils/path-expression.ts): path resolution and simple condition evaluation for mappings
 
-## License
+## Notes
 
-MIT
+- Upstream failures and timeouts return `503`
+- credential failures return `401`
+- the service fails at startup if signing key material is unavailable

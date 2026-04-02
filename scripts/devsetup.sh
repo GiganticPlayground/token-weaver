@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenAPI-First API Development Setup Script
+# Token Weaver Development Setup Script
 # This script automates the complete development setup from OpenAPI spec to running local dev server
 
 set -e  # Exit on any error
@@ -58,7 +58,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Start of setup
-print_header "OpenAPI-First Development Setup"
+print_header "Token Weaver Development Setup"
 
 # Step 1: Validate OpenAPI spec exists
 print_info "Step 1: Validating OpenAPI specification..."

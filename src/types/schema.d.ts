@@ -21,222 +21,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/users": {
+    "/auth": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get all users
-         * @description Returns a list of all registered users
-         */
-        get: operations["getUsers"];
+        get?: never;
         put?: never;
-        /**
-         * Create a new user
-         * @description Creates a new user in the system
-         */
-        post: operations["createUser"];
+        /** Authenticate and return a signed JWT */
+        post: operations["postAuth"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/users/{id}": {
+    "/.well-known/jwks.json": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get a user by ID
-         * @description Returns a specific user based on their ID
-         */
-        get: operations["getUserById"];
-        /**
-         * Update a complete user
-         * @description Updates all data of an existing user
-         */
-        put: operations["updateUser"];
+        /** Return the public JSON Web Key Set */
+        get: operations["getJwks"];
+        put?: never;
         post?: never;
-        /**
-         * Delete a user
-         * @description Deletes a user from the system
-         */
-        delete: operations["deleteUser"];
+        delete?: never;
         options?: never;
         head?: never;
-        /**
-         * Partially update a user
-         * @description Updates only the specified fields of a user
-         */
-        patch: operations["partialUpdateUser"];
+        patch?: never;
         trace?: never;
     };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        User: {
-            /**
-             * Format: uuid
-             * @description Unique user identifier
-             * @example 550e8400-e29b-41d4-a716-446655440000
-             */
-            id: string;
-            /**
-             * @description Full name of the user
-             * @example John Doe
-             */
-            name: string;
-            /**
-             * @description Age of the user in years
-             * @example 30
-             */
-            age?: number;
-            /**
-             * @description Physical address of the user
-             * @example 123 Main Street, Downtown
-             */
-            address?: string;
-            /**
-             * Format: email
-             * @description Email address of the user
-             * @example john.doe@example.com
-             */
-            email: string;
-            /**
-             * @description Phone number of the user
-             * @example +1 555 123 4567
-             */
-            phone?: string;
-            /**
-             * Format: date-time
-             * @description Date and time of user creation
-             * @example 2025-01-15T10:30:00Z
-             */
-            createdAt?: string;
-            /**
-             * Format: date-time
-             * @description Date and time of last update
-             * @example 2025-01-20T15:45:00Z
-             */
-            updatedAt?: string;
-        };
-        UserCreate: {
-            /**
-             * @description Full name of the user
-             * @example John Doe
-             */
-            name: string;
-            /**
-             * @description Age of the user in years
-             * @example 30
-             */
-            age?: number;
-            /**
-             * @description Physical address of the user
-             * @example 123 Main Street, Downtown
-             */
-            address?: string;
-            /**
-             * Format: email
-             * @description Email address of the user
-             * @example john.doe@example.com
-             */
-            email: string;
-            /**
-             * @description Phone number of the user
-             * @example +1 555 123 4567
-             */
-            phone?: string;
-        };
-        UserUpdate: {
-            /**
-             * @description Full name of the user
-             * @example John Doe
-             */
-            name: string;
-            /**
-             * @description Age of the user in years
-             * @example 30
-             */
-            age?: number;
-            /**
-             * @description Physical address of the user
-             * @example 123 Main Street, Downtown
-             */
-            address?: string;
-            /**
-             * Format: email
-             * @description Email address of the user
-             * @example john.doe@example.com
-             */
-            email: string;
-            /**
-             * @description Phone number of the user
-             * @example +1 555 123 4567
-             */
-            phone?: string;
-        };
-        UserPartial: {
-            /**
-             * @description Full name of the user
-             * @example John Doe
-             */
-            name?: string;
-            /**
-             * @description Age of the user in years
-             * @example 30
-             */
-            age?: number;
-            /**
-             * @description Physical address of the user
-             * @example 123 Main Street, Downtown
-             */
-            address?: string;
-            /**
-             * Format: email
-             * @description Email address of the user
-             * @example john.doe@example.com
-             */
-            email?: string;
-            /**
-             * @description Phone number of the user
-             * @example +1 555 123 4567
-             */
-            phone?: string;
-        };
         HealthCheck: {
-            /**
-             * @description Current health status of the service
-             * @example OK
-             */
+            /** @example ok */
             status: string;
-            /**
-             * Format: date-time
-             * @description Timestamp when the health check was performed
-             * @example 2025-01-15T10:30:00Z
-             */
+            /** Format: date-time */
             timestamp: string;
+            /** @example token-weaver */
+            service: string;
+        };
+        /** @description Flexible request body. Strategy-specific fields are mapped from this payload. */
+        AuthRequest: {
+            [key: string]: unknown;
+        };
+        AuthSuccess: {
+            token: string;
+            expires_in: number;
+        };
+        JwksResponse: {
+            keys: components["schemas"]["Jwk"][];
+        };
+        Jwk: {
+            /** @example RSA */
+            kty: string;
+            /** @example sig */
+            use: string;
+            /** @example RS256 */
+            alg: string;
+            /** @example token-weaver-key */
+            kid: string;
+            n: string;
+            e: string;
         };
         Error: {
-            /**
-             * @description Error code
-             * @example USER_NOT_FOUND
-             */
-            code: string;
-            /**
-             * @description Descriptive error message
-             * @example The requested user does not exist
-             */
             message: string;
-            /** @description Additional details about the error */
-            details?: string[];
+            code?: string;
         };
     };
     responses: never;
@@ -267,49 +123,7 @@ export interface operations {
             };
         };
     };
-    getUsers: {
-        parameters: {
-            query?: {
-                /** @description Maximum number of users to return */
-                limit?: number;
-                /** @description Page number for pagination */
-                page?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description User list retrieved successfully */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data?: components["schemas"]["User"][];
-                        /** @description Total number of users */
-                        total?: number;
-                        /** @description Current page */
-                        page?: number;
-                        /** @description Limit per page */
-                        limit?: number;
-                    };
-                };
-            };
-            /** @description Internal server error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    createUser: {
+    postAuth: {
         parameters: {
             query?: never;
             header?: never;
@@ -318,20 +132,20 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UserCreate"];
+                "application/json": components["schemas"]["AuthRequest"];
             };
         };
         responses: {
-            /** @description User created successfully */
-            201: {
+            /** @description Successful authentication */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"];
+                    "application/json": components["schemas"]["AuthSuccess"];
                 };
             };
-            /** @description Invalid data */
+            /** @description Malformed request body */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -340,8 +154,26 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Email already registered */
-            409: {
+            /** @description Invalid inbound token, invalid credential, or upstream rejection */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No matching strategy for this request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Upstream service unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -351,149 +183,26 @@ export interface operations {
             };
         };
     };
-    getUserById: {
+    getJwks: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description ID of the user to retrieve */
-                id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description User found */
+            /** @description Active signing key */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"];
+                    "application/json": components["schemas"]["JwksResponse"];
                 };
             };
-            /** @description User not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    updateUser: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description ID of the user to update */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserUpdate"];
-            };
-        };
-        responses: {
-            /** @description User updated successfully */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["User"];
-                };
-            };
-            /** @description Invalid data */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description User not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    deleteUser: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description ID of the user to delete */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description User deleted successfully */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description User not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    partialUpdateUser: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description ID of the user to update */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserPartial"];
-            };
-        };
-        responses: {
-            /** @description User updated successfully */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["User"];
-                };
-            };
-            /** @description Invalid data */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description User not found */
-            404: {
+            /** @description Signing key unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

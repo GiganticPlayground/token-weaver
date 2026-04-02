@@ -1,5 +1,5 @@
 {
-  "name": "openapi-first-poc",
+  "name": "token-weaver",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",

@@ -1,4 +1,4 @@
-# OpenAPI-First API - Docker Image
+# Token Weaver - Docker Image
 # Runs TypeScript directly using tsx runtime (no transpilation needed)
 
 FROM node:24-slim
