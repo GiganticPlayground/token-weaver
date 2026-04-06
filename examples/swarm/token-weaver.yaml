@@ -1,15 +1,15 @@
 strategies:
   - name: device
     type: direct
-    inbound_auth:
-      type: api_key
-      header: X-API-Key
-      key: ${TW_INBOUND_KEY}
+    # inbound_auth:
+    #   type: api_key
+    #   header: X-API-Key
+    #   key: ${TW_INBOUND_KEY}
     credential_path: $.request.body.secret
     credentials:
       - secret: ${SWARM_SHARED_SECRET}
         claims:
-          sub: swarm-device-001
+          sub: $.request.body.deviceId
           scope:
             - swarm
           source: swarm-example

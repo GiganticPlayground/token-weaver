@@ -169,9 +169,9 @@ function createTestConfig(upstreamPort: number): string {
             {
               secret: '${STATIC_CLIENT_SECRET}',
               claims: {
-                sub: 'client-device-001',
+                sub: '$.request.body.deviceId',
                 scope: ['general'],
-                customClaim: 'example-value',
+                customClaim: '$.request.body.customClaim',
               },
             },
           ],
@@ -352,7 +352,11 @@ void describe('Token Weaver e2e', () => {
         'Content-Type': 'application/json',
         'X-API-Key': 'inbound-key',
       },
-      body: JSON.stringify({ secret: 'static-secret' }),
+      body: JSON.stringify({
+        secret: 'static-secret',
+        deviceId: 'client-device-001',
+        customClaim: 'example-value',
+      }),
       },
     );
 

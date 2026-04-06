@@ -9,14 +9,17 @@ services:
       PORT: 3000
       LOG_LEVEL: info
       LOG_TYPE: pretty
-      TOKEN_WEAVER_CONFIG_PATH: /app/config/token-weaver.yaml
-      TOKEN_WEAVER_PRIVATE_KEY_PATH: /app/config/keys/private-key.pem
+      TOKEN_WEAVER_CONFIG_PATH: /token-weaver.yaml
+      TOKEN_WEAVER_PRIVATE_KEY_PATH: /run/secrets/token_weaver_private_key
       TOKEN_WEAVER_KID: token-weaver-swarm-example
       TW_INBOUND_KEY: dev-inbound-key
       SWARM_SHARED_SECRET: dev-swarm-secret
-    volumes:
-      - ./token-weaver.yaml:/app/config/token-weaver.yaml:ro
-      - ./keys:/app/config/keys:ro
+    configs:
+      - source: token_weaver_config
+        target: /token-weaver.yaml
+    secrets:
+      - source: token_weaver_private_key
+        target: token_weaver_private_key
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:3000/health']
@@ -24,3 +27,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+configs:
+  token_weaver_config:
+    file: ./token-weaver.yaml
+
+secrets:
+  token_weaver_private_key:
+    file: ./keys/private-key.pem

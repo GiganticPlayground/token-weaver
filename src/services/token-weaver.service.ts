@@ -227,7 +227,9 @@ export class TokenWeaverService {
       throw new HttpError(401, 'Invalid credential');
     }
 
-    return this.issueToken(strategy, matchedCredential.claims);
+    const mappedClaims = ensureMappedClaims(mapValue(matchedCredential.claims, requestContext), strategy.name);
+
+    return this.issueToken(strategy, mappedClaims);
   }
 
   private async handleDelegatedStrategy(
