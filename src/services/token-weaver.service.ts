@@ -84,33 +84,6 @@ function getHeaderValue(
   return value;
 }
 
-function matchRoute(strategy: StrategyConfig, req: Request): boolean {
-  const route = strategy.route;
-  const path = route?.path ?? '/auth';
-  if (req.path !== path) {
-    return false;
-  }
-
-  if (route?.headers) {
-    for (const [key, expected] of Object.entries(route.headers)) {
-      if (getHeaderValue(normalizeHeaders(req.headers), key) !== expected) {
-        return false;
-      }
-    }
-  }
-
-  if (route?.query) {
-    for (const [key, expected] of Object.entries(route.query)) {
-      const currentValue = req.query[key];
-      if (toComparableString(currentValue) !== expected) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
 function buildRequestContext(req: Request): RequestContext {
   return {
     request: {
@@ -185,13 +158,16 @@ async function parseUpstreamBody(response: globalThis.Response): Promise<unknown
 
 export class TokenWeaverService {
   private readonly jwtService = new JwtService(config.TOKEN_WEAVER_KID);
+  private readonly strategiesByName: ReadonlyMap<string, StrategyConfig>;
 
-  constructor(private readonly gatewayConfig: TokenWeaverConfig) {}
+  constructor(private readonly gatewayConfig: TokenWeaverConfig) {
+    this.strategiesByName = new Map(
+      gatewayConfig.strategies.map((strategy) => [strategy.name, strategy] as const),
+    );
+  }
 
   getRegisteredAuthRoutes(): string[] {
-    return [
-      ...new Set(this.gatewayConfig.strategies.map((strategy) => strategy.route?.path ?? '/auth')),
-    ];
+    return this.gatewayConfig.strategies.map((strategy) => `/auth/${strategy.name}`);
   }
 
   getJwks() {
@@ -212,19 +188,13 @@ export class TokenWeaverService {
   }
 
   private resolveStrategy(req: Request): StrategyConfig {
-    const matches = this.gatewayConfig.strategies.filter((strategy) => matchRoute(strategy, req));
-    if (matches.length === 0) {
-      throw new HttpError(404, 'No matching strategy for request route');
+    const strategyName = typeof req.params.name === 'string' ? req.params.name : '';
+    const strategy = this.strategiesByName.get(strategyName);
+    if (!strategy) {
+      throw new HttpError(404, `No matching strategy for name: ${strategyName}`);
     }
 
-    if (matches.length > 1) {
-      throw new HttpError(
-        500,
-        `Multiple strategies matched request route: ${matches.map((match) => match.name).join(', ')}`,
-      );
-    }
-
-    return matches[0]!;
+    return strategy;
   }
 
   private issueToken(

@@ -159,12 +159,6 @@ function createTestConfig(upstreamPort: number): string {
         {
           name: 'static-client',
           type: 'direct',
-          route: {
-            path: '/auth',
-            headers: {
-              'x-token-weaver-strategy': 'static-client',
-            },
-          },
           inbound_auth: {
             type: 'api_key',
             header: 'X-API-Key',
@@ -189,12 +183,6 @@ function createTestConfig(upstreamPort: number): string {
         {
           name: 'delegated-player-auth',
           type: 'delegated',
-          route: {
-            path: '/auth',
-            headers: {
-              'x-token-weaver-strategy': 'delegated-player-auth',
-            },
-          },
           inbound_auth: {
             type: 'api_key',
             header: 'X-API-Key',
@@ -228,12 +216,6 @@ function createTestConfig(upstreamPort: number): string {
         {
           name: 'delegated-timeout',
           type: 'delegated',
-          route: {
-            path: '/auth',
-            headers: {
-              'x-token-weaver-strategy': 'delegated-timeout',
-            },
-          },
           inbound_auth: {
             type: 'api_key',
             header: 'X-API-Key',
@@ -362,15 +344,17 @@ void describe('Token Weaver e2e', () => {
   });
 
   void it('issues a JWT for the direct strategy', async () => {
-    const response = await globalThis.fetch(`http://127.0.0.1:${testContext.servicePort}/auth`, {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/static-client`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': 'inbound-key',
-        'x-token-weaver-strategy': 'static-client',
       },
       body: JSON.stringify({ secret: 'static-secret' }),
-    });
+      },
+    );
 
     assert.equal(response.status, 200);
     const body = (await response.json()) as { token: string; expires_in: number };
@@ -387,32 +371,36 @@ void describe('Token Weaver e2e', () => {
   });
 
   void it('rejects invalid direct credentials', async () => {
-    const response = await globalThis.fetch(`http://127.0.0.1:${testContext.servicePort}/auth`, {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/static-client`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': 'inbound-key',
-        'x-token-weaver-strategy': 'static-client',
       },
       body: JSON.stringify({ secret: 'wrong-secret' }),
-    });
+      },
+    );
 
     assert.equal(response.status, 401);
   });
 
   void it('issues a JWT for the delegated strategy', async () => {
-    const response = await globalThis.fetch(`http://127.0.0.1:${testContext.servicePort}/auth`, {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-player-auth`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': 'inbound-key',
-        'x-token-weaver-strategy': 'delegated-player-auth',
       },
       body: JSON.stringify({
         username: 'player@example.com',
         password: 'correct-password',
       }),
-    });
+      },
+    );
 
     assert.equal(response.status, 200);
     const body = (await response.json()) as { token: string };
@@ -424,35 +412,39 @@ void describe('Token Weaver e2e', () => {
   });
 
   void it('returns 401 when delegated authentication is rejected', async () => {
-    const response = await globalThis.fetch(`http://127.0.0.1:${testContext.servicePort}/auth`, {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-player-auth`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': 'inbound-key',
-        'x-token-weaver-strategy': 'delegated-player-auth',
       },
       body: JSON.stringify({
         username: 'player@example.com',
         password: 'wrong-password',
       }),
-    });
+      },
+    );
 
     assert.equal(response.status, 401);
   });
 
   void it('returns 503 when delegated authentication times out', async () => {
-    const response = await globalThis.fetch(`http://127.0.0.1:${testContext.servicePort}/auth`, {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-timeout`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': 'inbound-key',
-        'x-token-weaver-strategy': 'delegated-timeout',
       },
       body: JSON.stringify({
         username: 'player@example.com',
         password: 'correct-password',
       }),
-    });
+      },
+    );
 
     assert.equal(response.status, 503);
   });

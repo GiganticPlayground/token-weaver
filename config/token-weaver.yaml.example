@@ -1,10 +1,6 @@
 strategies:
-  - name: static-client
+  - name: device
     type: direct
-    route:
-      path: /auth
-      headers:
-        x-token-weaver-strategy: static-client
     inbound_auth:
       type: api_key
       header: X-API-Key
@@ -21,12 +17,8 @@ strategies:
       issuer: token-weaver
       ttl: 3600
 
-  - name: delegated-player-auth
+  - name: player
     type: delegated
-    route:
-      path: /auth
-      headers:
-        x-token-weaver-strategy: delegated-player-auth
     inbound_auth:
       type: api_key
       header: X-API-Key

@@ -21,11 +21,13 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth": {
+    "/auth/{name}": {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                name: string;
+            };
             cookie?: never;
         };
         get?: never;
@@ -127,7 +129,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                name: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -163,8 +167,17 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description No matching strategy for this request */
+            /** @description No matching strategy for the requested name */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many authentication attempts */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

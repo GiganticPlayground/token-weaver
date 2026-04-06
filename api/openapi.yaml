@@ -1,4 +1,4 @@
-openapi: 3.0.3
+openapi: 3.1.1
 info:
   title: Token Weaver API
   description: Configurable authentication gateway for issuing JWTs
@@ -30,7 +30,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthCheck'
-  /auth:
+  /auth/{name}:
     post:
       summary: Authenticate and return a signed JWT
       tags:
@@ -38,6 +38,13 @@ paths:
       operationId: postAuth
       x-eov-operation-id: postAuth
       x-eov-operation-handler: authController
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Strategy name to execute
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -64,7 +71,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: No matching strategy for this request
+          description: No matching strategy for the requested name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many authentication attempts
           content:
             application/json:
               schema:

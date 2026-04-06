@@ -26,21 +26,6 @@ const mappingValueSchema: z.ZodType<unknown> = z.lazy(() =>
 
 const mappingObjectSchema = z.record(z.string(), mappingValueSchema);
 
-const routeRuleSchema = z
-  .object({
-    path: z.string().optional(),
-    headers: z.record(z.string(), scalarStringSchema).optional(),
-    query: z.record(z.string(), scalarStringSchema).optional(),
-  })
-  .transform((route) => ({
-    ...route,
-    headers: route.headers
-      ? Object.fromEntries(
-          Object.entries(route.headers).map(([key, value]) => [key.toLowerCase(), value]),
-        )
-      : undefined,
-  }));
-
 const inboundAuthSchema = z
   .object({
     type: z.enum(['bearer', 'api_key', 'none']),
@@ -74,7 +59,6 @@ const sharedJwtSchema = z.object({
 const directStrategySchema = z.object({
   name: z.string().min(1),
   type: z.literal('direct'),
-  route: routeRuleSchema.optional(),
   inbound_auth: inboundAuthSchema.optional(),
   credential_path: z.string().optional().default('$.request.body.secret'),
   credentials: z
@@ -116,7 +100,6 @@ const upstreamAuthSchema = z
 const delegatedStrategySchema = z.object({
   name: z.string().min(1),
   type: z.literal('delegated'),
-  route: routeRuleSchema.optional(),
   inbound_auth: inboundAuthSchema.optional(),
   upstream: z.object({
     url: z.string().min(1),
@@ -147,16 +130,26 @@ export const tokenWeaverConfigSchema = z
     strategies: z.array(strategySchema).min(1),
   })
   .superRefine((value, ctx) => {
-    const ambiguous = value.strategies.filter((strategy) => {
-      const routePath = strategy.route?.path ?? '/auth';
-      return routePath === '/auth' && !strategy.route?.headers && !strategy.route?.query;
-    });
+    const strategyNames = new Set<string>();
+    for (const strategy of value.strategies) {
+      if (strategyNames.has(strategy.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Strategy names must be unique: ${strategy.name}`,
+          path: ['strategies'],
+        });
+      }
+      strategyNames.add(strategy.name);
+    }
 
-    if (ambiguous.length > 1) {
+    const reservedStrategyNames = value.strategies
+      .filter((strategy) => strategy.name === 'health' || strategy.name === '.well-known')
+      .map((strategy) => strategy.name);
+
+    if (reservedStrategyNames.length > 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Multiple strategies share the default /auth route without discriminators: ${ambiguous
-          .map((strategy) => strategy.name)
+        message: `Strategy names are reserved and cannot be used: ${reservedStrategyNames
           .join(', ')}`,
         path: ['strategies'],
       });

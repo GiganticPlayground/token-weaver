@@ -9,7 +9,11 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { config } from './config/index';
-import { createOpenApiValidatorMiddleware, errorHandlerMiddleware } from './middlewares/index';
+import {
+  authRateLimitMiddleware,
+  createOpenApiValidatorMiddleware,
+  errorHandlerMiddleware,
+} from './middlewares/index';
 import { logger } from './utils/index';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,6 +42,7 @@ app.use(
   }),
 );
 
+app.use('/auth', authRateLimitMiddleware);
 app.use(createOpenApiValidatorMiddleware(apiSpecPath));
 app.use(errorHandlerMiddleware);
 

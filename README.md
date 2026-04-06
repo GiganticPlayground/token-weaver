@@ -29,7 +29,7 @@ Use this for:
 
 ## Endpoints
 
-- `POST /auth`
+- `POST /auth/{name}`
 - `GET /.well-known/jwks.json`
 - `GET /health`
 - `GET /api-docs`
@@ -49,12 +49,6 @@ npm install
 ```bash
 mkdir -p config
 cp config/token-weaver.yaml.example config/token-weaver.yaml
-```
-
-JSON is also supported if you prefer it:
-
-```bash
-cp config/token-weaver.json.example config/token-weaver.json
 ```
 
 ### 3. Provide a signing key
@@ -85,11 +79,10 @@ Token Weaver loads strategy config from:
 
 Example files are provided at:
 - [config/token-weaver.yaml.example](/Users/daniellmorris/work/gigaplay/os/token-weaver/config/token-weaver.yaml.example)
-- [config/token-weaver.json.example](/Users/daniellmorris/work/gigaplay/os/token-weaver/config/token-weaver.json.example)
 
 Core config concepts:
 - `type`: `direct` or `delegated`
-- `route`: request path and optional header/query discriminators used to select a strategy
+- `name`: unique strategy identifier and the `{name}` segment used in `POST /auth/{name}`
 - `inbound_auth`: optional `api_key`, `bearer`, or `none` gate applied before strategy execution
 - `credentials`: direct-strategy credential list
 - `upstream`: delegated-strategy target, auth, timeout, and request mapping
@@ -128,6 +121,8 @@ npm run validate
 
 ## Notes
 
+- `/auth/{name}` is protected by a simple in-process rate limit of 30 requests per minute per client IP
+- if the service is scaled across multiple instances, replace this with a shared-store distributed limiter such as Redis-backed rate limiting
 - Upstream failures and timeouts return `503`
 - credential failures return `401`
 - the service fails at startup if signing key material is unavailable
