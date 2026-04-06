@@ -1,27 +1,40 @@
 # Token Weaver - Docker Image
-# Runs TypeScript directly using tsx runtime (no transpilation needed)
+# Build TypeScript ahead of time and run the compiled output with Node.js
 
-FROM node:24-slim
+FROM node:24-slim AS base
 
-# Install OpenSSL and other runtime dependencies
+# Install runtime dependencies used by the app and healthcheck
 RUN apt-get update && apt-get install -y \
   openssl \
   ca-certificates \
   curl \
   && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
+
+FROM base AS builder
 
 # Copy package files first for better Docker layer caching
 COPY package*.json ./
 
-# Install ALL dependencies (including devDependencies for tsx)
-# Note: tsx is in devDependencies and required to run TypeScript directly
+# Install all dependencies required for the build
 RUN npm ci
 
-# Copy source code and configuration files
+# Copy source code and configuration files, then build
 COPY . .
+RUN npm run build
+
+FROM base AS runtime
+
+# Copy package files first for better Docker layer caching
+COPY package*.json ./
+
+# Install only production dependencies for runtime
+RUN npm ci --omit=dev
+
+# Copy the built application and required runtime assets
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/api ./api
 
 # Expose the port the app runs on
 EXPOSE 3000
@@ -38,5 +51,5 @@ USER nodejs
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
   CMD curl -f http://localhost:3000/health || exit 1
 
-# Start the application with tsx (runs TypeScript directly)
-CMD ["node", "--import=tsx", "src/index.ts"]
+# Start the compiled application
+CMD ["node", "dist/index.js"]

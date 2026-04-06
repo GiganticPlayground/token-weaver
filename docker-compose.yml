@@ -1,10 +1,22 @@
-version: '3.8'
-
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
+    develop:
+      watch:
+        - action: rebuild
+          path: ./src
+        - action: rebuild
+          path: ./api
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./package-lock.json
+        - action: rebuild
+          path: ./tsconfig.json
+        - action: rebuild
+          path: ./Dockerfile
     container_name: token-weaver
     ports:
       - '3000:3000'

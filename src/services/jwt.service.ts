@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, sign } from 'crypto';
+import { createPrivateKey, createPublicKey, sign, type JsonWebKey } from 'crypto';
 import { readFileSync } from 'fs';
 
 import { config } from '../config/index';
