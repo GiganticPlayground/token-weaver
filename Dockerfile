@@ -39,13 +39,9 @@ COPY --from=builder /app/api ./api
 # Expose the port the app runs on
 EXPOSE 3000
 
-# Create non-root user for security
-RUN groupadd --gid 1001 nodejs
-RUN useradd --uid 1001 --gid nodejs --shell /bin/bash --create-home nodejs
-
 # Change ownership of the app directory
-RUN chown -R nodejs:nodejs /app
-USER nodejs
+RUN chown -R node:node /app
+USER node
 
 # Health check to verify the application is running
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
