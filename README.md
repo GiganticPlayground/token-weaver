@@ -51,7 +51,19 @@ mkdir -p config
 cp config/token-weaver.yaml.example config/token-weaver.yaml
 ```
 
+JSON is also supported if you prefer it:
+
+```bash
+cp config/token-weaver.json.example config/token-weaver.json
+```
+
 ### 3. Provide a signing key
+
+Generate a local keypair:
+
+```bash
+npm run gen:keys
+```
 
 Set one of:
 - `TOKEN_WEAVER_PRIVATE_KEY`
@@ -71,7 +83,9 @@ Token Weaver loads strategy config from:
 - `TOKEN_WEAVER_CONFIG_PATH`
 - default: `config/token-weaver.yaml`
 
-An example file is provided at [config/token-weaver.yaml.example](/Users/daniellmorris/work/gigaplay/os/token-weaver/config/token-weaver.yaml.example).
+Example files are provided at:
+- [config/token-weaver.yaml.example](/Users/daniellmorris/work/gigaplay/os/token-weaver/config/token-weaver.yaml.example)
+- [config/token-weaver.json.example](/Users/daniellmorris/work/gigaplay/os/token-weaver/config/token-weaver.json.example)
 
 Core config concepts:
 - `type`: `direct` or `delegated`
@@ -97,10 +111,11 @@ Useful commands:
 
 ```bash
 npm run dev
+npm run gen:keys
 npm run type-check
 npm run lint
 npm run format:check
-npm run build
+npm run validate
 ```
 
 ## Implementation Layout

@@ -1,0 +1,73 @@
+{
+  "strategies": [
+    {
+      "name": "static-client",
+      "type": "direct",
+      "route": {
+        "path": "/auth",
+        "headers": {
+          "x-token-weaver-strategy": "static-client"
+        }
+      },
+      "inbound_auth": {
+        "type": "api_key",
+        "header": "X-API-Key",
+        "key": "${TW_INBOUND_KEY}"
+      },
+      "credential_path": "$.request.body.secret",
+      "credentials": [
+        {
+          "secret": "${STATIC_CLIENT_SECRET}",
+          "claims": {
+            "sub": "client-device-001",
+            "scope": ["general"],
+            "customClaim": "example-value"
+          }
+        }
+      ],
+      "jwt": {
+        "issuer": "token-weaver",
+        "ttl": 3600
+      }
+    },
+    {
+      "name": "delegated-player-auth",
+      "type": "delegated",
+      "route": {
+        "path": "/auth",
+        "headers": {
+          "x-token-weaver-strategy": "delegated-player-auth"
+        }
+      },
+      "inbound_auth": {
+        "type": "api_key",
+        "header": "X-API-Key",
+        "key": "${TW_INBOUND_KEY}"
+      },
+      "upstream": {
+        "url": "https://auth-service.example.com/v1/verify",
+        "method": "POST",
+        "timeout_ms": 5000,
+        "auth": {
+          "type": "bearer",
+          "token": "${UPSTREAM_API_TOKEN}"
+        },
+        "body_mapping": {
+          "username": "$.request.body.username",
+          "password": "$.request.body.password"
+        }
+      },
+      "response_mapping": {
+        "success_condition": "$.status == 'ok'",
+        "claims": {
+          "sub": "$.response.body.userId",
+          "scope": ["general"]
+        }
+      },
+      "jwt": {
+        "issuer": "token-weaver",
+        "ttl": 3600
+      }
+    }
+  ]
+}

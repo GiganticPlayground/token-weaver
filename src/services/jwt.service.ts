@@ -2,8 +2,11 @@ import { createPrivateKey, createPublicKey, sign } from 'crypto';
 import { readFileSync } from 'fs';
 
 import { config } from '../config/index';
-import type { JwksResponse } from '../types/token-weaver';
 import { HttpError } from '../utils/http-error';
+
+export interface JwksResponse {
+  keys: Array<JsonWebKey & { use: string; alg: string; kid: string }>;
+}
 
 function encodeBase64Url(value: Buffer | string): string {
   return Buffer.from(value)

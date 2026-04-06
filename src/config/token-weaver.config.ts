@@ -2,30 +2,173 @@ import { existsSync, readFileSync } from 'fs';
 import { extname } from 'path';
 
 import YAML from 'yaml';
+import { z } from 'zod';
 
 import { config as env } from './index';
-import type {
-  DelegatedStrategyConfig,
-  InboundAuthConfig,
-  MappingObject,
-  RouteRule,
-  StrategyConfig,
-  TokenWeaverConfig,
-  UpstreamAuthConfig,
-} from '../types/token-weaver';
 import { HttpError } from '../utils/http-error';
 
-function coerceString(value: unknown, message: string): string {
-  if (typeof value === 'string') {
-    return value;
-  }
+const scalarStringSchema: z.ZodType<string> = z
+  .union([z.string(), z.number(), z.boolean()])
+  .transform((value) => String(value));
 
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
+const mappingValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(z.string()),
+    z.array(z.number()),
+    z.array(z.boolean()),
+    z.record(z.string(), mappingValueSchema),
+  ]),
+);
 
-  throw new HttpError(500, message);
-}
+const mappingObjectSchema = z.record(z.string(), mappingValueSchema);
+
+const routeRuleSchema = z
+  .object({
+    path: z.string().optional(),
+    headers: z.record(z.string(), scalarStringSchema).optional(),
+    query: z.record(z.string(), scalarStringSchema).optional(),
+  })
+  .transform((route) => ({
+    ...route,
+    headers: route.headers
+      ? Object.fromEntries(
+          Object.entries(route.headers).map(([key, value]) => [key.toLowerCase(), value]),
+        )
+      : undefined,
+  }));
+
+const inboundAuthSchema = z
+  .object({
+    type: z.enum(['bearer', 'api_key', 'none']),
+    header: z.string().optional(),
+    key: z.string().optional(),
+    token: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.type === 'api_key' && !value.key) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'inbound_auth.key is required when inbound_auth.type is api_key',
+        path: ['key'],
+      });
+    }
+
+    if (value.type === 'bearer' && !value.token) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'inbound_auth.token is required when inbound_auth.type is bearer',
+        path: ['token'],
+      });
+    }
+  });
+
+const sharedJwtSchema = z.object({
+  issuer: z.string().min(1),
+  ttl: z.number().int().positive(),
+});
+
+const directStrategySchema = z.object({
+  name: z.string().min(1),
+  type: z.literal('direct'),
+  route: routeRuleSchema.optional(),
+  inbound_auth: inboundAuthSchema.optional(),
+  credential_path: z.string().optional().default('$.request.body.secret'),
+  credentials: z
+    .array(
+      z.object({
+        secret: z.string().min(1),
+        claims: mappingObjectSchema,
+      }),
+    )
+    .min(1),
+  jwt: sharedJwtSchema,
+});
+
+const upstreamAuthSchema = z
+  .object({
+    type: z.enum(['bearer', 'api_key', 'none']),
+    token: z.string().optional(),
+    key: z.string().optional(),
+    header: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.type === 'api_key' && !value.key) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'upstream.auth.key is required when upstream.auth.type is api_key',
+        path: ['key'],
+      });
+    }
+
+    if (value.type === 'bearer' && !value.token) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'upstream.auth.token is required when upstream.auth.type is bearer',
+        path: ['token'],
+      });
+    }
+  });
+
+const delegatedStrategySchema = z.object({
+  name: z.string().min(1),
+  type: z.literal('delegated'),
+  route: routeRuleSchema.optional(),
+  inbound_auth: inboundAuthSchema.optional(),
+  upstream: z.object({
+    url: z.string().min(1),
+    method: z
+      .string()
+      .min(1)
+      .transform((method) => method.toUpperCase()),
+    timeout_ms: z.number().int().positive().optional(),
+    auth: upstreamAuthSchema.optional(),
+    headers: z.record(z.string(), scalarStringSchema).optional(),
+    header_mapping: z.record(z.string(), z.string()).optional(),
+    body_mapping: mappingObjectSchema.optional(),
+  }),
+  response_mapping: z.object({
+    success_condition: z.string().min(1),
+    claims: mappingObjectSchema,
+  }),
+  jwt: sharedJwtSchema,
+});
+
+const strategySchema = z.discriminatedUnion('type', [
+  directStrategySchema,
+  delegatedStrategySchema,
+]);
+
+export const tokenWeaverConfigSchema = z
+  .object({
+    strategies: z.array(strategySchema).min(1),
+  })
+  .superRefine((value, ctx) => {
+    const ambiguous = value.strategies.filter((strategy) => {
+      const routePath = strategy.route?.path ?? '/auth';
+      return routePath === '/auth' && !strategy.route?.headers && !strategy.route?.query;
+    });
+
+    if (ambiguous.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Multiple strategies share the default /auth route without discriminators: ${ambiguous
+          .map((strategy) => strategy.name)
+          .join(', ')}`,
+        path: ['strategies'],
+      });
+    }
+  });
+
+export type TokenWeaverConfig = z.infer<typeof tokenWeaverConfigSchema>;
+export type StrategyConfig = TokenWeaverConfig['strategies'][number];
+export type DirectStrategyConfig = Extract<StrategyConfig, { type: 'direct' }>;
+export type DelegatedStrategyConfig = Extract<StrategyConfig, { type: 'delegated' }>;
+export type DirectCredential = DirectStrategyConfig['credentials'][number];
+export type InboundAuthConfig = NonNullable<StrategyConfig['inbound_auth']>;
 
 function resolveEnvPlaceholders(value: string): string {
   return value.replace(/\$\{([A-Z0-9_]+)\}/gi, (_match, variableName: string) => {
@@ -61,227 +204,21 @@ function resolveDeep(value: unknown): unknown {
   return value;
 }
 
-function ensureRecord(value: unknown, message: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HttpError(500, message);
-  }
+function parseConfigFile(fileContent: string, configPath: string): unknown {
+  const extension = extname(configPath).toLowerCase();
 
-  return value as Record<string, unknown>;
-}
-
-function parseRouteRule(value: unknown): RouteRule | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const route = ensureRecord(value, 'Strategy route must be an object');
-  return {
-    path: typeof route.path === 'string' ? route.path : undefined,
-    headers:
-      route.headers && typeof route.headers === 'object'
-        ? Object.fromEntries(
-            Object.entries(route.headers as Record<string, unknown>).map(([key, currentValue]) => [
-              key.toLowerCase(),
-              coerceString(
-                currentValue,
-                `route.headers.${key} must be a string, number, or boolean`,
-              ),
-            ]),
-          )
-        : undefined,
-    query:
-      route.query && typeof route.query === 'object'
-        ? Object.fromEntries(
-            Object.entries(route.query as Record<string, unknown>).map(([key, currentValue]) => [
-              key,
-              coerceString(currentValue, `route.query.${key} must be a string, number, or boolean`),
-            ]),
-          )
-        : undefined,
-  };
-}
-
-function parseInboundAuth(value: unknown): InboundAuthConfig | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const inboundAuth = ensureRecord(value, 'inbound_auth must be an object');
-  const type = inboundAuth.type;
-  if (type !== 'bearer' && type !== 'api_key' && type !== 'none') {
-    throw new HttpError(500, 'inbound_auth.type must be bearer, api_key, or none');
-  }
-
-  return {
-    type,
-    header: typeof inboundAuth.header === 'string' ? inboundAuth.header : undefined,
-    key: typeof inboundAuth.key === 'string' ? inboundAuth.key : undefined,
-    token: typeof inboundAuth.token === 'string' ? inboundAuth.token : undefined,
-  };
-}
-
-function parseJwt(value: unknown): { issuer: string; ttl: number } {
-  const jwt = ensureRecord(value, 'jwt config must be an object');
-  if (typeof jwt.issuer !== 'string' || typeof jwt.ttl !== 'number') {
-    throw new HttpError(500, 'jwt.issuer must be a string and jwt.ttl must be a number');
-  }
-
-  return {
-    issuer: jwt.issuer,
-    ttl: jwt.ttl,
-  };
-}
-
-function parseClaims(value: unknown, message: string): MappingObject {
-  return ensureRecord(value, message) as MappingObject;
-}
-
-function parseUpstreamAuth(value: unknown): UpstreamAuthConfig | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const auth = ensureRecord(value, 'upstream.auth must be an object');
-  const type = auth.type;
-  if (type !== 'bearer' && type !== 'api_key' && type !== 'none') {
-    throw new HttpError(500, 'upstream.auth.type must be bearer, api_key, or none');
-  }
-
-  return {
-    type,
-    token: typeof auth.token === 'string' ? auth.token : undefined,
-    key: typeof auth.key === 'string' ? auth.key : undefined,
-    header: typeof auth.header === 'string' ? auth.header : undefined,
-  };
-}
-
-function parseDelegatedStrategy(base: Record<string, unknown>): DelegatedStrategyConfig {
-  const strategyName = String(base.name);
-  const upstream = ensureRecord(base.upstream, 'delegated strategy requires upstream config');
-  const responseMapping = ensureRecord(
-    base.response_mapping,
-    'delegated strategy requires response_mapping config',
-  );
-
-  if (typeof upstream.url !== 'string' || typeof upstream.method !== 'string') {
-    throw new HttpError(500, 'upstream.url and upstream.method are required');
-  }
-
-  if (typeof responseMapping.success_condition !== 'string') {
-    throw new HttpError(500, 'response_mapping.success_condition is required');
-  }
-
-  return {
-    name: strategyName,
-    type: 'delegated',
-    route: parseRouteRule(base.route),
-    inbound_auth: parseInboundAuth(base.inbound_auth),
-    upstream: {
-      url: upstream.url,
-      method: upstream.method.toUpperCase(),
-      timeout_ms: typeof upstream.timeout_ms === 'number' ? upstream.timeout_ms : undefined,
-      auth: parseUpstreamAuth(upstream.auth),
-      headers:
-        upstream.headers && typeof upstream.headers === 'object'
-          ? Object.fromEntries(
-              Object.entries(upstream.headers as Record<string, unknown>).map(
-                ([key, currentValue]) => [
-                  key,
-                  coerceString(
-                    currentValue,
-                    `upstream.headers.${key} must be a string, number, or boolean`,
-                  ),
-                ],
-              ),
-            )
-          : undefined,
-      header_mapping:
-        upstream.header_mapping && typeof upstream.header_mapping === 'object'
-          ? Object.fromEntries(
-              Object.entries(upstream.header_mapping as Record<string, unknown>).map(
-                ([key, currentValue]) => [
-                  key,
-                  coerceString(
-                    currentValue,
-                    `upstream.header_mapping.${key} must be a string expression`,
-                  ),
-                ],
-              ),
-            )
-          : undefined,
-      body_mapping: upstream.body_mapping
-        ? parseClaims(upstream.body_mapping, 'upstream.body_mapping must be an object')
-        : undefined,
-    },
-    response_mapping: {
-      success_condition: responseMapping.success_condition,
-      claims: parseClaims(responseMapping.claims, 'response_mapping.claims must be an object'),
-    },
-    jwt: parseJwt(base.jwt),
-  };
-}
-
-function parseStrategy(value: unknown): StrategyConfig {
-  const base = ensureRecord(value, 'Each strategy must be an object');
-  if (typeof base.name !== 'string') {
-    throw new HttpError(500, 'Each strategy requires a name');
-  }
-  const strategyName = base.name;
-
-  if (base.type === 'direct') {
-    if (!Array.isArray(base.credentials)) {
-      throw new HttpError(500, 'direct strategy requires a credentials array');
+  try {
+    if (extension === '.json') {
+      return JSON.parse(fileContent) as unknown;
     }
 
-    return {
-      name: strategyName,
-      type: 'direct',
-      route: parseRouteRule(base.route),
-      inbound_auth: parseInboundAuth(base.inbound_auth),
-      credential_path:
-        typeof base.credential_path === 'string' ? base.credential_path : '$.request.body.secret',
-      credentials: base.credentials.map((credential) => {
-        const parsedCredential = ensureRecord(credential, 'Credential entry must be an object');
-        if (typeof parsedCredential.secret !== 'string') {
-          throw new HttpError(
-            500,
-            `Credential entry for strategy ${strategyName} must define secret`,
-          );
-        }
-
-        return {
-          secret: parsedCredential.secret,
-          claims: parseClaims(
-            parsedCredential.claims,
-            `Credential claims for strategy ${strategyName} must be an object`,
-          ),
-        };
-      }),
-      jwt: parseJwt(base.jwt),
-    };
-  }
-
-  if (base.type === 'delegated') {
-    return parseDelegatedStrategy(base);
-  }
-
-  throw new HttpError(500, `Unsupported strategy type for ${String(base.name)}`);
-}
-
-function assertUniqueDefaultRoutes(strategies: StrategyConfig[]): void {
-  const defaultedStrategies = strategies.filter(
-    (strategy) => (strategy.route?.path ?? '/auth') === '/auth',
-  );
-  const ambiguous = defaultedStrategies.filter(
-    (strategy) => !strategy.route?.headers && !strategy.route?.query,
-  );
-
-  if (ambiguous.length > 1) {
+    return YAML.parse(fileContent) as unknown;
+  } catch (error) {
     throw new HttpError(
       500,
-      `Multiple strategies share the default /auth route without discriminators: ${ambiguous
-        .map((strategy) => strategy.name)
-        .join(', ')}`,
+      `Failed to parse Token Weaver config at ${configPath}: ${
+        error instanceof Error ? error.message : 'unknown parse error'
+      }`,
     );
   }
 }
@@ -293,17 +230,16 @@ export function loadTokenWeaverConfig(): TokenWeaverConfig {
   }
 
   const fileContent = readFileSync(configPath, 'utf8');
-  const extension = extname(configPath).toLowerCase();
-  const parsed: unknown =
-    extension === '.json' ? (JSON.parse(fileContent) as unknown) : YAML.parse(fileContent);
-  const resolved = resolveDeep(parsed) as TokenWeaverConfig;
+  const parsed = parseConfigFile(fileContent, configPath);
+  const resolved = resolveDeep(parsed);
 
-  if (!resolved || !Array.isArray(resolved.strategies) || resolved.strategies.length === 0) {
-    throw new HttpError(500, 'Token Weaver config must define at least one strategy');
+  const result = tokenWeaverConfigSchema.safeParse(resolved);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `  - ${issue.path.join('.') || 'config'}: ${issue.message}`)
+      .join('\n');
+    throw new HttpError(500, `Token Weaver config validation failed:\n${issues}`);
   }
 
-  const strategies = resolved.strategies.map((strategy) => parseStrategy(strategy));
-  assertUniqueDefaultRoutes(strategies);
-
-  return { strategies };
+  return result.data;
 }

@@ -3,15 +3,19 @@ import type { Request } from 'express';
 import { JwtService } from './jwt.service';
 import { config } from '../config/index';
 import type {
-  AuthSuccessPayload,
   DelegatedStrategyConfig,
   DirectCredential,
   InboundAuthConfig,
   StrategyConfig,
   TokenWeaverConfig,
-} from '../types/token-weaver';
+} from '../config/token-weaver.config';
 import { HttpError, UpstreamUnavailableError } from '../utils/http-error';
 import { evaluateCondition, resolvePath } from '../utils/path-expression';
+
+export interface AuthSuccessPayload {
+  token: string;
+  expires_in: number;
+}
 
 type RequestContext = {
   request: {
