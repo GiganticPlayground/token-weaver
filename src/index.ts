@@ -26,6 +26,8 @@ const apiSpecContent: string = readFileSync(apiSpecPath, 'utf8');
 const apiSpec: swaggerUi.JsonObject = YAML.parse(apiSpecContent) as swaggerUi.JsonObject;
 
 const app = express();
+app.set('trust proxy', config.TRUST_PROXY);
+
 const corsOptions =
   !config.CORS_ORIGINS || config.CORS_ORIGINS === '*'
     ? undefined
@@ -50,7 +52,9 @@ app.use(
   }),
 );
 
-app.use('/auth', authRateLimitMiddleware);
+if (config.RATE_LIMIT_ENABLED) {
+  app.use('/auth', authRateLimitMiddleware);
+}
 app.use(createOpenApiValidatorMiddleware(apiSpecPath));
 app.use(errorHandlerMiddleware);
 

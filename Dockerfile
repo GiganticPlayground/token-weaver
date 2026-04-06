@@ -52,4 +52,4 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
   CMD curl -f http://localhost:3000/health || exit 1
 
 # Start the compiled application
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/src/index.js"]

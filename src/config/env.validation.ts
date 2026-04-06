@@ -38,6 +38,27 @@ export const envSchema = z.object({
 
       return origins.length > 0 ? origins : undefined;
     }),
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((value) => {
+      if (!value || value === 'false') {
+        return false;
+      }
+
+      if (value === 'true') {
+        return true;
+      }
+
+      const parsed = parseInt(value, 10);
+      return Number.isNaN(parsed) ? false : parsed;
+    }),
+  RATE_LIMIT_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('false')
+    .transform((value) => value === 'true'),
   RATE_LIMIT_MAX: z
     .string()
     .transform((val) => parseInt(val, 10))

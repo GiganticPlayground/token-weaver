@@ -89,14 +89,99 @@ Core config concepts:
 - `response_mapping`: delegated-strategy success condition and claim extraction
 - `jwt`: issuer and TTL for tokens issued by that strategy
 
+### Mapping Expressions
+
+Token Weaver uses simple `$` path expressions to pull values out of the request or an upstream response.
+
+Examples:
+- `$.request.body.username`
+- `$.request.headers.authorization`
+- `$.response.body.userId`
+- `$.response.status`
+
+Array indexes and quoted keys are also supported:
+- `$.request.body.roles[0]`
+- `$['response']['body']['userId']`
+
+### Direct Strategy Claims Mapping
+
+Direct strategies match a credential locally, then copy the configured `claims` object into the JWT payload.
+
+Example:
+
+```yaml
+credential_path: $.request.body.secret
+credentials:
+  - secret: ${STATIC_CLIENT_SECRET}
+    claims:
+      sub: client-device-001
+      scope:
+        - general
+      customClaim: example-value
+```
+
+In that example:
+- the inbound credential is read from `request.body.secret`
+- if it matches, the JWT gets `sub`, `scope`, and `customClaim` exactly as configured
+
+### Delegated Upstream Mapping
+
+Delegated strategies can build an upstream request from the inbound request using `body_mapping` and `header_mapping`.
+
+Example:
+
+```yaml
+upstream:
+  url: https://auth-service.example.com/v1/verify
+  method: POST
+  header_mapping:
+    X-Forwarded-User: $.request.body.username
+  body_mapping:
+    username: $.request.body.username
+    password: $.request.body.password
+```
+
+In that example:
+- the upstream JSON body is constructed from the incoming request body
+- any mapped header values must resolve to a string, number, or boolean to be sent upstream
+
+### Upstream Success And Claims Extraction
+
+After the upstream call completes, Token Weaver evaluates `response_mapping.success_condition`. If it passes, it maps `response_mapping.claims` into the JWT payload.
+
+Example:
+
+```yaml
+response_mapping:
+  success_condition: $.status == 'ok'
+  claims:
+    sub: $.response.body.userId
+    scope:
+      - general
+```
+
+In that example:
+- `success_condition` checks the upstream response body field `status`
+- if the condition is truthy, `sub` is copied from `response.body.userId`
+- mapped claims must resolve to an object, otherwise the request fails with a server error
+
 ## Environment Variables
 
-- `PORT`: HTTP port, default `3000`
-- `NODE_ENV`: `development`, `test`, or `production`
-- `TOKEN_WEAVER_CONFIG_PATH`: path to YAML or JSON strategy config
-- `TOKEN_WEAVER_PRIVATE_KEY`: RSA private key PEM content
-- `TOKEN_WEAVER_PRIVATE_KEY_PATH`: path to RSA private key PEM file
-- `TOKEN_WEAVER_KID`: JWKS key id, default `token-weaver-key`
+| Variable | Default | Used for |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port for the Express server |
+| `NODE_ENV` | `development` | Application environment mode |
+| `LOG_LEVEL` | `debug` | Minimum log level for the `logra` logger |
+| `LOG_TYPE` | `pretty` | Logger output style: `pretty`, `json`, or `hidden` |
+| `CORS_ORIGINS` | unset | Allowed CORS origins; unset or `*` allows all |
+| `TRUST_PROXY` | `false` | Express trust proxy setting for forwarded headers and client IP handling |
+| `RATE_LIMIT_ENABLED` | `false` | Enables IP-based auth endpoint rate limiting |
+| `RATE_LIMIT_MAX` | `30` | Maximum auth requests per window per client IP when rate limiting is enabled |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Rate-limit window length in milliseconds |
+| `TOKEN_WEAVER_CONFIG_PATH` | `config/token-weaver.yaml` | Path to the Token Weaver YAML or JSON strategy config |
+| `TOKEN_WEAVER_PRIVATE_KEY_PATH` | unset | Filesystem path to the RSA private key PEM used for signing JWTs |
+| `TOKEN_WEAVER_PRIVATE_KEY` | unset | Inline RSA private key PEM content used for signing JWTs |
+| `TOKEN_WEAVER_KID` | `token-weaver-key` | JWKS key ID included in signed JWT headers and JWKS output |
 
 ## Development
 
