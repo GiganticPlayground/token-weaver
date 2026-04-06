@@ -1,5 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 
+import { logger } from '../utils/index';
+
 interface CustomError extends Error {
   status?: number;
   errors?: unknown;
@@ -10,7 +12,7 @@ interface ExpressHandler<T extends Error> {
 }
 
 export const errorHandlerMiddleware: ExpressHandler<CustomError> = (err, _req, res, _next) => {
-  console.error('Request error:', err);
+  logger.error('Request error', err);
 
   if (err.status === 400 && err.errors) {
     return res.status(400).json({

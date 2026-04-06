@@ -13,6 +13,7 @@ import {
   authRateLimitMiddleware,
   createOpenApiValidatorMiddleware,
   errorHandlerMiddleware,
+  requestContextMiddleware,
 } from './middlewares/index';
 import { logger } from './utils/index';
 
@@ -31,6 +32,7 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(requestContextMiddleware);
 
 app.use(
   '/api-docs',
