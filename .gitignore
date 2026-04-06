@@ -15,6 +15,7 @@ pnpm-debug.log*
 # Configuration files with secrets
 config/api-keys.json
 config/token-weaver.yaml
+config/keys/
 
 # Build output
 dist/
