@@ -1,6 +1,5 @@
 import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 
 import cors from 'cors';
 import express from 'express';
@@ -17,11 +16,8 @@ import {
 } from './middlewares/index';
 import { logger } from './utils/index';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 // Load OpenAPI specification
-export const apiSpecPath: string = join(__dirname, '../api/openapi.yaml');
+export const apiSpecPath: string = join(process.cwd(), 'api/openapi.yaml');
 const apiSpecContent: string = readFileSync(apiSpecPath, 'utf8');
 const apiSpec: swaggerUi.JsonObject = YAML.parse(apiSpecContent) as swaggerUi.JsonObject;
 

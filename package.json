@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "nodemon --exec tsx src/index.ts",
     "start": "node --import=tsx src/index.ts",
-    "build": "tsc --noEmit false --outDir dist",
+    "build": "rm -rf dist && tsc --noEmit false --outDir dist && node scripts/fix-dist-esm-imports.js dist",
     "setup": "bash scripts/setup.sh",
     "generate": "npm run gen-types && npm run gen-controllers",
     "gen-types": "npx openapi-typescript ./api/openapi.yaml -o ./src/types/schema.d.ts",
