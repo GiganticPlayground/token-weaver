@@ -2,10 +2,13 @@ import { LOG_TYPES, createLogger } from 'logra';
 
 import { config } from '../config/index';
 
-const logLevel = config.NODE_ENV === 'production' ? 'info' : 'debug';
-const logStyle = config.NODE_ENV === 'production' ? LOG_TYPES.JSON : LOG_TYPES.PRETTY;
+const logStyleMap = {
+  json: LOG_TYPES.JSON,
+  pretty: LOG_TYPES.PRETTY,
+  hidden: LOG_TYPES.HIDDEN,
+} as const;
 
 export const logger = createLogger('token-weaver', {
-  level: logLevel,
-  style: logStyle,
+  level: config.LOG_LEVEL,
+  style: logStyleMap[config.LOG_TYPE],
 });

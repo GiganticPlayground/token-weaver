@@ -14,6 +14,42 @@ export const envSchema = z.object({
     .optional()
     .default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).optional().default('development'),
+  LOG_LEVEL: z
+    .enum(['silly', 'trace', 'debug', 'info', 'warn', 'error', 'fatal'])
+    .optional()
+    .default('debug'),
+  LOG_TYPE: z.enum(['json', 'pretty', 'hidden']).optional().default('pretty'),
+  CORS_ORIGINS: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (!value) {
+        return undefined;
+      }
+
+      if (value === '*') {
+        return '*';
+      }
+
+      const origins = value
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0);
+
+      return origins.length > 0 ? origins : undefined;
+    }),
+  RATE_LIMIT_MAX: z
+    .string()
+    .transform((val) => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .optional()
+    .default(30),
+  RATE_LIMIT_WINDOW_MS: z
+    .string()
+    .transform((val) => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .optional()
+    .default(60_000),
   TOKEN_WEAVER_CONFIG_PATH: z.string().optional().default('config/token-weaver.yaml'),
   TOKEN_WEAVER_PRIVATE_KEY_PATH: z.string().optional(),
   TOKEN_WEAVER_PRIVATE_KEY: z.string().optional(),

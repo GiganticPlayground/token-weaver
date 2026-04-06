@@ -26,10 +26,16 @@ const apiSpecContent: string = readFileSync(apiSpecPath, 'utf8');
 const apiSpec: swaggerUi.JsonObject = YAML.parse(apiSpecContent) as swaggerUi.JsonObject;
 
 const app = express();
+const corsOptions =
+  !config.CORS_ORIGINS || config.CORS_ORIGINS === '*'
+    ? undefined
+    : {
+        origin: config.CORS_ORIGINS,
+      };
 
 // Security and body parsing middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestContextMiddleware);

@@ -1,11 +1,10 @@
 import { rateLimit } from 'express-rate-limit';
 
-const AUTH_RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const AUTH_RATE_LIMIT_MAX_REQUESTS = 30;
+import { config } from '../config/index';
 
 export const authRateLimitMiddleware = rateLimit({
-  windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
-  limit: AUTH_RATE_LIMIT_MAX_REQUESTS,
+  windowMs: config.RATE_LIMIT_WINDOW_MS,
+  limit: config.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
