@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'crypto';
+import { createHmac, generateKeyPairSync } from 'crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -246,6 +246,25 @@ function createTestConfig(upstreamPort: number): string {
             ttl: 3600,
           },
         },
+        {
+          name: 'hmac-client',
+          type: 'direct',
+          credentials: [
+            {
+              secret: '${HMAC_CLIENT_SECRET}',
+              claims: {
+                sub: 'ics-client',
+                scope: 'mobile',
+              },
+            },
+          ],
+          jwt: {
+            algorithm: 'HS256',
+            secret: '${TW_HMAC_SECRET}',
+            issuer: 'token-weaver',
+            ttl: 1800,
+          },
+        },
       ],
     },
     null,
@@ -287,6 +306,8 @@ void describe('Token Weaver e2e', () => {
         TW_INBOUND_KEY: 'inbound-key',
         STATIC_CLIENT_SECRET: 'static-secret',
         UPSTREAM_API_TOKEN: 'upstream-service-token',
+        HMAC_CLIENT_SECRET: 'hmac-client-secret',
+        TW_HMAC_SECRET: 'test-hmac-shared-secret',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -451,5 +472,146 @@ void describe('Token Weaver e2e', () => {
     );
 
     assert.equal(response.status, 503);
+  });
+
+  void it('issues an HS256 JWT for the hmac-client strategy', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/hmac-client`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret: 'hmac-client-secret' }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { token: string; expires_in: number };
+    assert.equal(body.expires_in, 1800);
+
+    const [encodedHeader, encodedPayload, encodedSignature] = body.token.split('.');
+    const header = decodeJwtPart(encodedHeader!);
+    const payload = decodeJwtPart(encodedPayload!);
+
+    assert.equal(header.alg, 'HS256');
+    assert.equal(header.kid, undefined, 'HS256 tokens must not include kid');
+    assert.equal(payload.iss, 'token-weaver');
+    assert.equal(payload.sub, 'ics-client');
+    assert.equal(payload.scope, 'mobile');
+    assert.equal(typeof payload.exp, 'number');
+
+    // Verify signature with crypto.createHmac (same as CloudFront Function would)
+    const signingInput = `${encodedHeader}.${encodedPayload}`;
+    const expectedSignature = createHmac('sha256', 'test-hmac-shared-secret')
+      .update(signingInput)
+      .digest('base64url');
+    assert.equal(encodedSignature, expectedSignature);
+  });
+
+  void it('JWKS still returns RS256 key in mixed-mode deployment', async () => {
+    const jwksResponse = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/.well-known/jwks.json`,
+    );
+    assert.equal(jwksResponse.status, 200);
+    const jwks = (await jwksResponse.json()) as { keys: Array<Record<string, unknown>> };
+    assert.equal(jwks.keys.length, 1);
+    assert.equal(jwks.keys[0]?.alg, 'RS256');
+  });
+});
+
+void describe('Token Weaver e2e — HS256-only deployment', () => {
+  const hs256Context = {} as TestContext;
+
+  void before(async () => {
+    hs256Context.tmpDir = mkdtempSync(join(tmpdir(), 'token-weaver-hs256-'));
+
+    const configPath = join(hs256Context.tmpDir, 'token-weaver.config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        strategies: [
+          {
+            name: 'hmac-only',
+            type: 'direct',
+            credentials: [
+              {
+                secret: '${HMAC_CLIENT_SECRET}',
+                claims: { sub: 'hmac-sub', scope: 'read' },
+              },
+            ],
+            jwt: {
+              algorithm: 'HS256',
+              secret: '${TW_HMAC_SECRET}',
+              issuer: 'token-weaver',
+              ttl: 900,
+            },
+          },
+        ],
+      }),
+    );
+
+    hs256Context.servicePort = await getAvailablePort();
+    hs256Context.output = [];
+    hs256Context.serviceProcess = spawn(process.execPath, ['--import=tsx', 'src/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        PORT: String(hs256Context.servicePort),
+        TOKEN_WEAVER_CONFIG_PATH: configPath,
+        HMAC_CLIENT_SECRET: 'hmac-secret',
+        TW_HMAC_SECRET: 'hs256-only-shared-secret',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    hs256Context.serviceProcess.stdout.on('data', (chunk) => {
+      hs256Context.output.push(String(chunk));
+    });
+    hs256Context.serviceProcess.stderr.on('data', (chunk) => {
+      hs256Context.output.push(String(chunk));
+    });
+
+    await waitForServiceReady(hs256Context.servicePort, hs256Context.output);
+  });
+
+  void after(async () => {
+    hs256Context.serviceProcess.kill('SIGTERM');
+    await new Promise((resolve) => hs256Context.serviceProcess.once('exit', resolve));
+    rmSync(hs256Context.tmpDir, { recursive: true, force: true });
+  });
+
+  void it('starts without RSA key and issues HS256 tokens', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${hs256Context.servicePort}/auth/hmac-only`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret: 'hmac-secret' }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { token: string; expires_in: number };
+    assert.equal(body.expires_in, 900);
+
+    const [encodedHeader, encodedPayload, encodedSignature] = body.token.split('.');
+    const header = decodeJwtPart(encodedHeader!);
+    assert.equal(header.alg, 'HS256');
+    assert.equal(header.kid, undefined);
+
+    const signingInput = `${encodedHeader}.${encodedPayload}`;
+    const expectedSignature = createHmac('sha256', 'hs256-only-shared-secret')
+      .update(signingInput)
+      .digest('base64url');
+    assert.equal(encodedSignature, expectedSignature);
+  });
+
+  void it('returns empty JWKS keys in HS256-only mode', async () => {
+    const jwksResponse = await globalThis.fetch(
+      `http://127.0.0.1:${hs256Context.servicePort}/.well-known/jwks.json`,
+    );
+    assert.equal(jwksResponse.status, 200);
+    const jwks = (await jwksResponse.json()) as { keys: Array<Record<string, unknown>> };
+    assert.equal(jwks.keys.length, 0);
   });
 });

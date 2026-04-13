@@ -42,3 +42,17 @@ strategies:
     jwt:
       issuer: token-weaver
       ttl: 3600
+
+  # HS256 strategy — for consumers that validate with shared secret (e.g. CloudFront Functions)
+  - name: ics
+    type: direct
+    jwt:
+      algorithm: HS256
+      secret: ${TW_ICS_HMAC_SECRET}
+      issuer: token-weaver
+      ttl: 3600
+    credentials:
+      - secret: ${TW_ICS_CLIENT_SECRET}
+        claims:
+          sub: ics-client
+          scope: mobile
