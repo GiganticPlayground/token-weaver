@@ -157,13 +157,17 @@ async function parseUpstreamBody(response: globalThis.Response): Promise<unknown
 }
 
 export class TokenWeaverService {
-  private readonly jwtService = new JwtService(config.TOKEN_WEAVER_KID);
+  private readonly jwtService: JwtService;
   private readonly strategiesByName: ReadonlyMap<string, StrategyConfig>;
 
   constructor(private readonly gatewayConfig: TokenWeaverConfig) {
     this.strategiesByName = new Map(
       gatewayConfig.strategies.map((strategy) => [strategy.name, strategy] as const),
     );
+
+    // Only load the RSA private key when at least one strategy uses RS256 signing.
+    const needsRsa = gatewayConfig.strategies.some((s) => s.jwt.algorithm === 'RS256');
+    this.jwtService = new JwtService(config.TOKEN_WEAVER_KID, needsRsa);
   }
 
   getRegisteredAuthRoutes(): string[] {
@@ -202,7 +206,7 @@ export class TokenWeaverService {
     claims: Record<string, unknown>,
   ): AuthSuccessPayload {
     return {
-      token: this.jwtService.sign(claims, strategy.jwt.ttl, strategy.jwt.issuer),
+      token: this.jwtService.sign(claims, strategy.jwt),
       expires_in: strategy.jwt.ttl,
     };
   }

@@ -51,10 +51,22 @@ const inboundAuthSchema = z
     }
   });
 
-const sharedJwtSchema = z.object({
-  issuer: z.string().min(1),
-  ttl: z.number().int().positive(),
-});
+const sharedJwtSchema = z
+  .object({
+    algorithm: z.enum(['RS256', 'HS256']).optional().default('RS256'),
+    secret: z.string().min(1).optional(),
+    issuer: z.string().min(1),
+    ttl: z.number().int().positive(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.algorithm === 'HS256' && !value.secret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'jwt.secret is required when algorithm is HS256',
+        path: ['secret'],
+      });
+    }
+  });
 
 const directStrategySchema = z.object({
   name: z.string().min(1),
@@ -162,6 +174,7 @@ export type DirectStrategyConfig = Extract<StrategyConfig, { type: 'direct' }>;
 export type DelegatedStrategyConfig = Extract<StrategyConfig, { type: 'delegated' }>;
 export type DirectCredential = DirectStrategyConfig['credentials'][number];
 export type InboundAuthConfig = NonNullable<StrategyConfig['inbound_auth']>;
+export type JwtConfig = StrategyConfig['jwt'];
 
 function resolveEnvPlaceholders(value: string): string {
   return value.replace(/\$\{([A-Z0-9_]+)\}/gi, (_match, variableName: string) => {
