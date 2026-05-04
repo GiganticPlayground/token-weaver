@@ -253,7 +253,7 @@ function createTestConfig(upstreamPort: number): string {
             {
               secret: '${HMAC_CLIENT_SECRET}',
               claims: {
-                sub: 'ics-client',
+                sub: 'hmac-client',
                 scope: 'mobile',
               },
             },
@@ -495,7 +495,7 @@ void describe('Token Weaver e2e', () => {
     assert.equal(header.alg, 'HS256');
     assert.equal(header.kid, undefined, 'HS256 tokens must not include kid');
     assert.equal(payload.iss, 'token-weaver');
-    assert.equal(payload.sub, 'ics-client');
+    assert.equal(payload.sub, 'hmac-client');
     assert.equal(payload.scope, 'mobile');
     assert.equal(typeof payload.exp, 'number');
 
