@@ -12,7 +12,7 @@ import type {
 } from '../config/token-weaver.config';
 import { HttpError, UpstreamUnavailableError } from '../utils/http-error';
 import { evaluateCondition, resolvePath } from '../utils/path-expression';
-import { logger } from '../utils/index';
+import { httpRequest, logger } from '../utils/index';
 
 export interface AuthSuccessPayload {
   token: string;
@@ -284,59 +284,29 @@ export class TokenWeaverService {
       body = JSON.stringify(mapValue(strategy.upstream.body_mapping, requestContext));
     }
 
-    const controller = new AbortController();
-    const timeout = globalThis.setTimeout(
-      () => controller.abort(),
-      strategy.upstream.timeout_ms ?? 5000,
-    );
-
-    logger.debug('Upstream request', {
-      strategy: strategy.name,
-      method: strategy.upstream.method,
-      url: strategy.upstream.url,
-    });
-
-    const requestStart = Date.now();
     let response: globalThis.Response;
     try {
-      response = await globalThis.fetch(strategy.upstream.url, {
-        method: strategy.upstream.method,
-        headers,
-        body: body ?? null,
-        signal: controller.signal,
-      });
+      response = await httpRequest(
+        strategy.upstream.url,
+        {
+          method: strategy.upstream.method,
+          headers,
+          body: body ?? null,
+          timeoutMs: strategy.upstream.timeout_ms ?? 5000,
+          ...(strategy.log?.request_body ? { logRequestBody: true } : {}),
+          ...(strategy.log?.response_body ? { logResponseBody: true } : {}),
+          ...(strategy.log?.request_headers ? { logRequestHeaders: true } : {}),
+        },
+        { strategy: strategy.name },
+      );
     } catch (error) {
-      const duration_ms = Date.now() - requestStart;
       const isTimeout = error instanceof Error && error.name === 'AbortError';
-      logger.warn('Upstream request failed', {
-        strategy: strategy.name,
-        url: strategy.upstream.url,
-        duration_ms,
-        reason: isTimeout ? 'timeout' : 'unreachable',
-        error: error instanceof Error ? error.message : String(error),
-      });
       throw new UpstreamUnavailableError(
         isTimeout ? 'Upstream service timed out' : 'Upstream service unreachable',
       );
-    } finally {
-      globalThis.clearTimeout(timeout);
     }
-
-    const duration_ms = Date.now() - requestStart;
-    logger.debug('Upstream response', {
-      strategy: strategy.name,
-      status: response.status,
-      duration_ms,
-    });
 
     const responseBody = await parseUpstreamBody(response);
-
-    if (strategy.log?.upstream_body_success) {
-      logger.debug('Upstream response body', {
-        strategy: strategy.name,
-        upstreamBody: responseBody,
-      });
-    }
 
     const evaluationContext: UpstreamContext = isPlainObject(responseBody)
       ? {
@@ -365,7 +335,6 @@ export class TokenWeaverService {
           upstreamStatus: response.status,
           mappedStatus: matched.status,
           condition: matched.condition,
-          ...(strategy.log?.upstream_body_error ?? true ? { upstreamBody: responseBody } : {}),
         });
         throw new HttpError(matched.status, message, matched.code ? { code: matched.code } : undefined);
       }
@@ -374,7 +343,6 @@ export class TokenWeaverService {
         strategy: strategy.name,
         upstreamStatus: response.status,
         successCondition: strategy.response_mapping.success_condition,
-        ...(strategy.log?.upstream_body_error ?? true ? { upstreamBody: responseBody } : {}),
       });
       throw new HttpError(401, 'Upstream authentication rejected');
     }

@@ -22,8 +22,11 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
     addLogContext('ip', req.ip);
 
     res.setHeader('x-request-id', requestId);
+
+    logger.info('START - INCOMING HTTP REQUEST');
+
     res.on('finish', () => {
-      logger.info('request completed', {
+      logger.info('END - INCOMING HTTP REQUEST', {
         durationMs: Date.now() - startedAt,
         statusCode: res.statusCode,
       });

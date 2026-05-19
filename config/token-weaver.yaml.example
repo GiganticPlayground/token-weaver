@@ -53,8 +53,9 @@ strategies:
         scope:
           - general
     log:
-      upstream_body_error: true
-      upstream_body_success: false
+      request_body: false
+      response_body: false
+      request_headers: false
     jwt:
       issuer: token-weaver
       ttl: 3600
