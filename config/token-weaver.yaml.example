@@ -35,10 +35,26 @@ strategies:
         password: $.request.body.password
     response_mapping:
       success_condition: $.status == 'ok'
+      error_mappings:
+        - condition: $.response.status == 403
+          status: 403
+          message: $.response.body.message
+          code: FORBIDDEN
+        - condition: $.response.status == 401
+          status: 401
+          message: Invalid credentials
+        - condition: $.response.status == 404
+          status: 404
+          message: User Not found
+        - status: 401
+          message: $.response.body.error
       claims:
         sub: $.response.body.userId
         scope:
           - general
+    log:
+      upstream_body_error: true
+      upstream_body_success: false
     jwt:
       issuer: token-weaver
       ttl: 3600

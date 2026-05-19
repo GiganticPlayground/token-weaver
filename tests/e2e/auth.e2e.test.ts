@@ -91,6 +91,22 @@ function createUpstreamHandler(expectedToken: string) {
         return;
       }
 
+      if (req.url === '/verify-with-errors') {
+        if (requestBody.username === 'banned@example.com') {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'forbidden', message: 'Account suspended' }));
+          return;
+        }
+        if (requestBody.username === 'valid@example.com' && requestBody.password === 'correct') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', userId: 'mapped-user-1' }));
+          return;
+        }
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'denied', message: 'Invalid credentials' }));
+        return;
+      }
+
       if (username === 'player@example.com' && password === 'correct-password') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', userId: 'player-123' }));
@@ -236,6 +252,91 @@ function createTestConfig(upstreamPort: number): string {
           },
           response_mapping: {
             success_condition: "$.status == 'ok'",
+            claims: {
+              sub: '$.response.body.userId',
+              scope: ['general'],
+            },
+          },
+          jwt: {
+            issuer: 'token-weaver',
+            ttl: 3600,
+          },
+        },
+        {
+          name: 'delegated-error-mapped',
+          type: 'delegated',
+          inbound_auth: {
+            type: 'api_key',
+            header: 'X-API-Key',
+            key: '${TW_INBOUND_KEY}',
+          },
+          upstream: {
+            url: `http://127.0.0.1:${upstreamPort}/verify-with-errors`,
+            method: 'POST',
+            timeout_ms: 1_000,
+            auth: {
+              type: 'bearer',
+              token: '${UPSTREAM_API_TOKEN}',
+            },
+            body_mapping: {
+              username: '$.request.body.username',
+              password: '$.request.body.password',
+            },
+          },
+          response_mapping: {
+            success_condition: "$.status == 'ok'",
+            error_mappings: [
+              {
+                condition: '$.response.status == 403',
+                status: 403,
+                message: '$.response.body.message',
+                code: 'FORBIDDEN',
+              },
+              {
+                condition: '$.response.status == 401',
+                status: 401,
+                message: 'Invalid credentials',
+              },
+            ],
+            claims: {
+              sub: '$.response.body.userId',
+              scope: ['general'],
+            },
+          },
+          jwt: {
+            issuer: 'token-weaver',
+            ttl: 3600,
+          },
+        },
+        {
+          name: 'delegated-catchall',
+          type: 'delegated',
+          inbound_auth: {
+            type: 'api_key',
+            header: 'X-API-Key',
+            key: '${TW_INBOUND_KEY}',
+          },
+          upstream: {
+            url: `http://127.0.0.1:${upstreamPort}/verify-with-errors`,
+            method: 'POST',
+            timeout_ms: 1_000,
+            auth: {
+              type: 'bearer',
+              token: '${UPSTREAM_API_TOKEN}',
+            },
+            body_mapping: {
+              username: '$.request.body.username',
+              password: '$.request.body.password',
+            },
+          },
+          response_mapping: {
+            success_condition: "$.status == 'ok'",
+            error_mappings: [
+              {
+                status: 401,
+                message: 'Authentication failed',
+              },
+            ],
             claims: {
               sub: '$.response.body.userId',
               scope: ['general'],
@@ -515,6 +616,85 @@ void describe('Token Weaver e2e', () => {
     const jwks = (await jwksResponse.json()) as { keys: Array<Record<string, unknown>> };
     assert.equal(jwks.keys.length, 1);
     assert.equal(jwks.keys[0]?.alg, 'RS256');
+  });
+
+  void it('maps 403 upstream response to 403 with body message', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-error-mapped`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': 'inbound-key' },
+        body: JSON.stringify({ username: 'banned@example.com', password: 'anything' }),
+      },
+    );
+
+    assert.equal(response.status, 403);
+    const body = (await response.json()) as { message: string };
+    assert.equal(body.message, 'Account suspended');
+  });
+
+  void it('maps 401 upstream response to 401 with literal message', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-error-mapped`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': 'inbound-key' },
+        body: JSON.stringify({ username: 'player@example.com', password: 'wrong' }),
+      },
+    );
+
+    assert.equal(response.status, 401);
+    const body = (await response.json()) as { message: string };
+    assert.equal(body.message, 'Invalid credentials');
+  });
+
+  void it('succeeds with error_mappings configured when upstream returns success', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-error-mapped`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': 'inbound-key' },
+        body: JSON.stringify({ username: 'valid@example.com', password: 'correct' }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { token: string };
+    const [, encodedPayload] = body.token.split('.');
+    const payload = decodeJwtPart(encodedPayload!);
+    assert.equal(payload.sub, 'mapped-user-1');
+  });
+
+  void it('catch-all error mapping handles any upstream rejection', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-catchall`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': 'inbound-key' },
+        body: JSON.stringify({ username: 'banned@example.com', password: 'anything' }),
+      },
+    );
+
+    assert.equal(response.status, 401);
+    const body = (await response.json()) as { message: string };
+    assert.equal(body.message, 'Authentication failed');
+  });
+
+  void it('catch-all error mapping does not affect successful upstream auth', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/delegated-catchall`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': 'inbound-key' },
+        body: JSON.stringify({ username: 'valid@example.com', password: 'correct' }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { token: string };
+    const [, encodedPayload] = body.token.split('.');
+    const payload = decodeJwtPart(encodedPayload!);
+    assert.equal(payload.sub, 'mapped-user-1');
   });
 });
 
