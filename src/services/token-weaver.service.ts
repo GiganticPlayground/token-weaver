@@ -12,7 +12,7 @@ import type {
 } from '../config/token-weaver.config';
 import { HttpError, UpstreamUnavailableError } from '../utils/http-error';
 import { evaluateCondition, resolvePath } from '../utils/path-expression';
-import { logger } from '../utils/index';
+import { httpRequest, logger } from '../utils/index';
 
 export interface AuthSuccessPayload {
   token: string;
@@ -284,50 +284,24 @@ export class TokenWeaverService {
       body = JSON.stringify(mapValue(strategy.upstream.body_mapping, requestContext));
     }
 
-    const controller = new AbortController();
-    const timeout = globalThis.setTimeout(
-      () => controller.abort(),
-      strategy.upstream.timeout_ms ?? 5000,
-    );
-
-    logger.debug('Upstream request', {
-      strategy: strategy.name,
-      method: strategy.upstream.method,
-      url: strategy.upstream.url,
-    });
-
-    const requestStart = Date.now();
     let response: globalThis.Response;
     try {
-      response = await globalThis.fetch(strategy.upstream.url, {
-        method: strategy.upstream.method,
-        headers,
-        body: body ?? null,
-        signal: controller.signal,
-      });
+      response = await httpRequest(
+        strategy.upstream.url,
+        {
+          method: strategy.upstream.method,
+          headers,
+          body: body ?? null,
+          timeoutMs: strategy.upstream.timeout_ms ?? 5000,
+        },
+        { strategy: strategy.name },
+      );
     } catch (error) {
-      const duration_ms = Date.now() - requestStart;
       const isTimeout = error instanceof Error && error.name === 'AbortError';
-      logger.warn('Upstream request failed', {
-        strategy: strategy.name,
-        url: strategy.upstream.url,
-        duration_ms,
-        reason: isTimeout ? 'timeout' : 'unreachable',
-        error: error instanceof Error ? error.message : String(error),
-      });
       throw new UpstreamUnavailableError(
         isTimeout ? 'Upstream service timed out' : 'Upstream service unreachable',
       );
-    } finally {
-      globalThis.clearTimeout(timeout);
     }
-
-    const duration_ms = Date.now() - requestStart;
-    logger.debug('Upstream response', {
-      strategy: strategy.name,
-      status: response.status,
-      duration_ms,
-    });
 
     const responseBody = await parseUpstreamBody(response);
 

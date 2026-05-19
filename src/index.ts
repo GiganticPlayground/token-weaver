@@ -15,6 +15,7 @@ import {
   requestContextMiddleware,
 } from './middlewares/index';
 import { logger } from './utils/index';
+import { setupShutdown } from './utils/shutdown';
 
 // Load OpenAPI specification
 export const apiSpecPath: string = join(process.cwd(), 'api/openapi.yaml');
@@ -54,6 +55,8 @@ if (config.RATE_LIMIT_ENABLED) {
 app.use(createOpenApiValidatorMiddleware(apiSpecPath));
 app.use(errorHandlerMiddleware);
 
-app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, () => {
   logger.info(`Server is running on port ${config.PORT}`);
 });
+
+setupShutdown(server, config.SHUTDOWN_TIMEOUT_MS);

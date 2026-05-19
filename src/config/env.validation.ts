@@ -75,6 +75,12 @@ export const envSchema = z.object({
   TOKEN_WEAVER_PRIVATE_KEY_PATH: z.string().optional(),
   TOKEN_WEAVER_PRIVATE_KEY: z.string().optional(),
   TOKEN_WEAVER_KID: z.string().optional().default('token-weaver-key'),
+  SHUTDOWN_TIMEOUT_MS: z
+    .string()
+    .transform((val) => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .optional()
+    .default(30_000),
 });
 
 /**
