@@ -5,12 +5,14 @@ import { config } from '../config/index';
 import type {
   DelegatedStrategyConfig,
   DirectCredential,
+  ErrorMappingConfig,
   InboundAuthConfig,
   StrategyConfig,
   TokenWeaverConfig,
 } from '../config/token-weaver.config';
 import { HttpError, UpstreamUnavailableError } from '../utils/http-error';
 import { evaluateCondition, resolvePath } from '../utils/path-expression';
+import { logger } from '../utils/index';
 
 export interface AuthSuccessPayload {
   token: string;
@@ -136,6 +138,21 @@ function ensureMappedClaims(claims: unknown, strategyName: string): Record<strin
   }
 
   return claims;
+}
+
+function resolveErrorMessage(message: string, context: Record<string, unknown>): string {
+  if (message.startsWith('$')) {
+    const resolved = resolvePath(message, context);
+    return typeof resolved === 'string' ? resolved : message;
+  }
+  return message;
+}
+
+function matchErrorMapping(
+  mappings: ErrorMappingConfig[],
+  context: Record<string, unknown>,
+): ErrorMappingConfig | undefined {
+  return mappings.find((mapping) => mapping.condition === undefined || evaluateCondition(mapping.condition, context));
 }
 
 async function parseUpstreamBody(response: globalThis.Response): Promise<unknown> {
@@ -273,6 +290,13 @@ export class TokenWeaverService {
       strategy.upstream.timeout_ms ?? 5000,
     );
 
+    logger.debug('Upstream request', {
+      strategy: strategy.name,
+      method: strategy.upstream.method,
+      url: strategy.upstream.url,
+    });
+
+    const requestStart = Date.now();
     let response: globalThis.Response;
     try {
       response = await globalThis.fetch(strategy.upstream.url, {
@@ -282,16 +306,38 @@ export class TokenWeaverService {
         signal: controller.signal,
       });
     } catch (error) {
+      const duration_ms = Date.now() - requestStart;
+      const isTimeout = error instanceof Error && error.name === 'AbortError';
+      logger.warn('Upstream request failed', {
+        strategy: strategy.name,
+        url: strategy.upstream.url,
+        duration_ms,
+        reason: isTimeout ? 'timeout' : 'unreachable',
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw new UpstreamUnavailableError(
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Upstream service timed out'
-          : 'Upstream service unreachable',
+        isTimeout ? 'Upstream service timed out' : 'Upstream service unreachable',
       );
     } finally {
       globalThis.clearTimeout(timeout);
     }
 
+    const duration_ms = Date.now() - requestStart;
+    logger.debug('Upstream response', {
+      strategy: strategy.name,
+      status: response.status,
+      duration_ms,
+    });
+
     const responseBody = await parseUpstreamBody(response);
+
+    if (strategy.log?.upstream_body_success) {
+      logger.debug('Upstream response body', {
+        strategy: strategy.name,
+        upstreamBody: responseBody,
+      });
+    }
+
     const evaluationContext: UpstreamContext = isPlainObject(responseBody)
       ? {
           ...responseBody,
@@ -309,6 +355,27 @@ export class TokenWeaverService {
         };
 
     if (!evaluateCondition(strategy.response_mapping.success_condition, evaluationContext)) {
+      const errorMappings = strategy.response_mapping.error_mappings ?? [];
+      const matched = matchErrorMapping(errorMappings, evaluationContext);
+
+      if (matched) {
+        const message = resolveErrorMessage(matched.message, evaluationContext);
+        logger.warn('Upstream auth rejected — error mapping matched', {
+          strategy: strategy.name,
+          upstreamStatus: response.status,
+          mappedStatus: matched.status,
+          condition: matched.condition,
+          ...(strategy.log?.upstream_body_error ?? true ? { upstreamBody: responseBody } : {}),
+        });
+        throw new HttpError(matched.status, message, matched.code ? { code: matched.code } : undefined);
+      }
+
+      logger.warn('Upstream auth rejected', {
+        strategy: strategy.name,
+        upstreamStatus: response.status,
+        successCondition: strategy.response_mapping.success_condition,
+        ...(strategy.log?.upstream_body_error ?? true ? { upstreamBody: responseBody } : {}),
+      });
       throw new HttpError(401, 'Upstream authentication rejected');
     }
 

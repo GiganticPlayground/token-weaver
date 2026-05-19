@@ -26,6 +26,18 @@ const mappingValueSchema: z.ZodType<unknown> = z.lazy(() =>
 
 const mappingObjectSchema = z.record(z.string(), mappingValueSchema);
 
+const errorMappingSchema = z.object({
+  condition: z.string().min(1).optional(),
+  status: z.number().int().min(400).max(599),
+  message: z.string().min(1),
+  code: z.string().optional(),
+});
+
+const logConfigSchema = z.object({
+  upstream_body_error: z.boolean().optional().default(true),
+  upstream_body_success: z.boolean().optional().default(false),
+}).optional();
+
 const inboundAuthSchema = z
   .object({
     type: z.enum(['bearer', 'api_key', 'none']),
@@ -127,9 +139,11 @@ const delegatedStrategySchema = z.object({
   }),
   response_mapping: z.object({
     success_condition: z.string().min(1),
+    error_mappings: z.array(errorMappingSchema).optional(),
     claims: mappingObjectSchema,
   }),
   jwt: sharedJwtSchema,
+  log: logConfigSchema,
 });
 
 const strategySchema = z.discriminatedUnion('type', [
@@ -175,6 +189,8 @@ export type DelegatedStrategyConfig = Extract<StrategyConfig, { type: 'delegated
 export type DirectCredential = DirectStrategyConfig['credentials'][number];
 export type InboundAuthConfig = NonNullable<StrategyConfig['inbound_auth']>;
 export type JwtConfig = StrategyConfig['jwt'];
+export type ErrorMappingConfig = z.infer<typeof errorMappingSchema>;
+export type DelegatedLogConfig = z.infer<typeof logConfigSchema>;
 
 function resolveEnvPlaceholders(value: string): string {
   return value.replace(/\$\{([A-Z0-9_]+)\}/gi, (_match, variableName: string) => {
