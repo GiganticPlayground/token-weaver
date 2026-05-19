@@ -34,8 +34,9 @@ const errorMappingSchema = z.object({
 });
 
 const logConfigSchema = z.object({
-  upstream_body_error: z.boolean().optional().default(true),
-  upstream_body_success: z.boolean().optional().default(false),
+  request_body: z.boolean().optional().default(false),
+  response_body: z.boolean().optional().default(false),
+  request_headers: z.boolean().optional().default(false),
 }).optional();
 
 const inboundAuthSchema = z

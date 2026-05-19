@@ -293,6 +293,9 @@ export class TokenWeaverService {
           headers,
           body: body ?? null,
           timeoutMs: strategy.upstream.timeout_ms ?? 5000,
+          ...(strategy.log?.request_body ? { logRequestBody: true } : {}),
+          ...(strategy.log?.response_body ? { logResponseBody: true } : {}),
+          ...(strategy.log?.request_headers ? { logRequestHeaders: true } : {}),
         },
         { strategy: strategy.name },
       );
@@ -304,13 +307,6 @@ export class TokenWeaverService {
     }
 
     const responseBody = await parseUpstreamBody(response);
-
-    if (strategy.log?.upstream_body_success) {
-      logger.debug('Upstream response body', {
-        strategy: strategy.name,
-        upstreamBody: responseBody,
-      });
-    }
 
     const evaluationContext: UpstreamContext = isPlainObject(responseBody)
       ? {
@@ -339,7 +335,6 @@ export class TokenWeaverService {
           upstreamStatus: response.status,
           mappedStatus: matched.status,
           condition: matched.condition,
-          ...(strategy.log?.upstream_body_error ?? true ? { upstreamBody: responseBody } : {}),
         });
         throw new HttpError(matched.status, message, matched.code ? { code: matched.code } : undefined);
       }
@@ -348,7 +343,6 @@ export class TokenWeaverService {
         strategy: strategy.name,
         upstreamStatus: response.status,
         successCondition: strategy.response_mapping.success_condition,
-        ...(strategy.log?.upstream_body_error ?? true ? { upstreamBody: responseBody } : {}),
       });
       throw new HttpError(401, 'Upstream authentication rejected');
     }
