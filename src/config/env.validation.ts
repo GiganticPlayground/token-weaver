@@ -54,6 +54,11 @@ export const envSchema = z.object({
       const parsed = parseInt(value, 10);
       return Number.isNaN(parsed) ? false : parsed;
     }),
+  API_DOCS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('true')
+    .transform((value) => value === 'true'),
   RATE_LIMIT_ENABLED: z
     .enum(['true', 'false'])
     .optional()
