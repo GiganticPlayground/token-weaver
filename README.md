@@ -32,7 +32,7 @@ Use this for:
 - `POST /auth/{name}`
 - `GET /.well-known/jwks.json`
 - `GET /health`
-- `GET /api-docs`
+- `GET /api-docs` _(disabled when `API_DOCS_ENABLED=false`)_
 
 Routes are bound through the OpenAPI spec in [api/openapi.yaml](/Users/daniellmorris/work/gigaplay/os/token-weaver/api/openapi.yaml) via `express-openapi-validator`.
 
@@ -86,7 +86,8 @@ Core config concepts:
 - `inbound_auth`: optional `api_key`, `bearer`, or `none` gate applied before strategy execution
 - `credentials`: direct-strategy credential list
 - `upstream`: delegated-strategy target, auth, timeout, and request mapping
-- `response_mapping`: delegated-strategy success condition and claim extraction
+- `response_mapping`: delegated-strategy success condition, error mappings, and claim extraction
+- `log`: delegated-strategy optional HTTP logging flags (`request_body`, `response_body`, `request_headers`)
 - `jwt`: issuer and TTL for tokens issued by that strategy
 
 ### Mapping Expressions
@@ -145,15 +146,27 @@ In that example:
 - the upstream JSON body is constructed from the incoming request body
 - any mapped header values must resolve to a string, number, or boolean to be sent upstream
 
-### Upstream Success And Claims Extraction
+### Upstream Success, Error Mapping, And Claims Extraction
 
 After the upstream call completes, Token Weaver evaluates `response_mapping.success_condition`. If it passes, it maps `response_mapping.claims` into the JWT payload.
+
+If the success condition fails, `error_mappings` are evaluated in order — the first matching entry determines the HTTP status and message returned to the caller. An entry with no `condition` acts as a catch-all. If no mapping matches, the request fails with `401`.
 
 Example:
 
 ```yaml
 response_mapping:
   success_condition: $.status == 'ok'
+  error_mappings:
+    - condition: $.response.status == 403
+      status: 403
+      message: $.response.body.message   # path expression resolved from upstream response
+      code: FORBIDDEN
+    - condition: $.response.status == 401
+      status: 401
+      message: Invalid credentials        # literal string
+    - status: 401                         # no condition — catch-all
+      message: $.response.body.error
   claims:
     sub: $.response.body.userId
     scope:
@@ -163,7 +176,21 @@ response_mapping:
 In that example:
 - `success_condition` checks the upstream response body field `status`
 - if the condition is truthy, `sub` is copied from `response.body.userId`
+- if it fails, `error_mappings` are checked in order; `message` can be a literal or a `$` path expression resolved from the upstream response
 - mapped claims must resolve to an object, otherwise the request fails with a server error
+
+### Upstream Logging
+
+Delegated strategies accept an optional `log` block controlling what is included in upstream HTTP log entries:
+
+```yaml
+log:
+  request_body: false     # include outbound request body in START - HTTP log
+  response_body: false    # include upstream response body in END - HTTP log
+  request_headers: false  # include outbound request headers in START - HTTP log
+```
+
+All flags default to `false`. Enable selectively for debugging — request headers may contain auth credentials.
 
 ## Environment Variables
 
@@ -182,6 +209,8 @@ In that example:
 | `TOKEN_WEAVER_PRIVATE_KEY_PATH` | unset | Filesystem path to the RSA private key PEM used for signing JWTs |
 | `TOKEN_WEAVER_PRIVATE_KEY` | unset | Inline RSA private key PEM content used for signing JWTs |
 | `TOKEN_WEAVER_KID` | `token-weaver-key` | JWKS key ID included in signed JWT headers and JWKS output |
+| `API_DOCS_ENABLED` | `true` | Mounts the Swagger UI at `/api-docs`; set to `false` to disable in production |
+| `SHUTDOWN_TIMEOUT_MS` | `30000` | Maximum time in milliseconds to wait for in-flight requests to complete on SIGTERM/SIGINT before force-exiting |
 
 ## Development
 

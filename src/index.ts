@@ -39,15 +39,17 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestContextMiddleware);
 
-app.use(
-  '/api-docs',
-  swaggerUi.serve,
-  swaggerUi.setup(apiSpec, {
-    explorer: true,
-    customCss: '.swagger-ui .topbar { display: none }',
-    customSiteTitle: 'API Documentation',
-  }),
-);
+if (config.API_DOCS_ENABLED) {
+  app.use(
+    '/api-docs',
+    swaggerUi.serve,
+    swaggerUi.setup(apiSpec, {
+      explorer: true,
+      customCss: '.swagger-ui .topbar { display: none }',
+      customSiteTitle: 'API Documentation',
+    }),
+  );
+}
 
 if (config.RATE_LIMIT_ENABLED) {
   app.use('/auth', authRateLimitMiddleware);
