@@ -271,6 +271,68 @@ Behavior:
   error middleware renders the response.
 - Options are validated at construction time and **fail fast** on an inconsistent combination.
 
+### Optional authorization (requirements & path allow/deny)
+
+Beyond authenticating the token, the middleware can optionally **authorize** the request against
+the token's own claims. These are opt-in — omit them and the middleware only authenticates.
+Authorization failures pass a `ForbiddenError` (status `403`) to `next()`; `static` mode skips
+authorization (no claims). The model: **Token Weaver defines access by embedding claims when it
+issues the JWT, and the middleware enforces them.**
+
+```ts
+createAuthMiddleware({
+  mode: 'jwks',
+  issuer: 'https://token-weaver.example.com',
+  jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
+  // every requirement must hold, or 403:
+  requirements: [
+    { type: 'scope', value: 'nexus:read' },                       // token.scope must include it
+    { type: 'claim_includes', claim: 'permissions', value: 'data:read' },
+  ],
+  // per-endpoint allow/deny, with the patterns carried in the token's claims:
+  paths: {
+    pathPrefix: '/api',        // stripped from req.baseUrl+req.path before matching
+    whitelistClaim: 'whitelist', // if present on the token, one pattern must match (glob * supported)
+    blacklistClaim: 'blacklist', // any match denies — blacklist wins over whitelist
+  },
+});
+```
+
+A Token Weaver strategy issues those claims like any other (see Direct/Delegated claims mapping):
+
+```yaml
+claims:
+  sub: $.response.body.userId
+  scope:
+    - nexus:read
+  whitelist:
+    - /nexus/*
+```
+
+### Configuring from environment variables
+
+`createAuthMiddlewareFromEnv()` builds the same middleware from env vars (default prefix `AUTH_`;
+pass `{ prefix, env, onVerified }` to override). Mode-specific required fields are still validated
+fail-fast.
+
+```ts
+import { createAuthMiddlewareFromEnv } from 'token-weaver/auth';
+app.use(createAuthMiddlewareFromEnv());
+```
+
+| Env var (prefix `AUTH_`) | Maps to | Notes |
+| --- | --- | --- |
+| `AUTH_MODE` | `mode` | `jwks` \| `secret` \| `static` |
+| `AUTH_ISSUER` | `issuer` | required for jwt modes |
+| `AUTH_AUDIENCE` | `audience` | optional |
+| `AUTH_JWKS_URI` | `jwksUri` | `jwks` mode |
+| `AUTH_SECRET` | `secret` | `secret` mode |
+| `AUTH_STATIC_TOKEN` | `staticToken` | `static` mode |
+| `AUTH_PATH_PREFIX` | `paths.pathPrefix` | optional |
+| `AUTH_WHITELIST_CLAIM` | `paths.whitelistClaim` | optional; enables `paths` |
+| `AUTH_BLACKLIST_CLAIM` | `paths.blacklistClaim` | optional; enables `paths` |
+| `AUTH_REQUIREMENTS` | `requirements` | JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]` |
+
 ### Library install notes
 
 - The package builds itself on install via a `prepare` script (no committed `dist/`).

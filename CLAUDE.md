@@ -76,6 +76,15 @@ into a consumer's module graph. Three modes (`jwks`/RS256, `secret`/HS256, `stat
 success it sets `req.jwtPayload` and calls an optional `onVerified` hook, on failure it passes
 a neutral `AuthError` (status 401) to `next()`. See `README.md` for the consumer API.
 
+It also does **optional, opt-in authorization** (ported from `ipb-nexus`): `requirements`
+(`scope`/`claim_includes`) and `paths` (whitelist/blacklist patterns read from token claims, with
+`pathPrefix` stripping). Authorization failures pass a `ForbiddenError` (status **403**, distinct
+from the 401 `AuthError`); `static` mode skips authorization. The allow/deny patterns live in the
+JWT claims — Token Weaver's issuing strategies already emit arbitrary claims, so this is purely a
+verification-side feature (no issuing change). `createAuthMiddlewareFromEnv()` (in `src/auth/env.ts`)
+builds the same middleware from `AUTH_*` env vars. All of this is additive: with no
+`requirements`/`paths`, behavior is unchanged.
+
 This dual purpose shapes the build (see Conventions): `tsconfig.build.json` emits `dist/` with
 `.d.ts`, and a `prepare` guard builds on git-install without breaking the Docker `npm ci`.
 

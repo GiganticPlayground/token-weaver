@@ -5,6 +5,7 @@
  * server or issuing internals. Consume via the `token-weaver/auth` subpath.
  */
 export { createAuthMiddleware } from './auth.middleware';
-export { AuthError } from './types';
-export type { AuthMiddlewareOptions, AuthMode } from './types';
+export { createAuthMiddlewareFromEnv, type FromEnvOptions } from './env';
+export { AuthError, ForbiddenError } from './types';
+export type { AuthMiddlewareOptions, AuthMode, AuthPaths, AuthRequirement } from './types';
 export type { JWTPayload } from 'jose';
