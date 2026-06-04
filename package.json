@@ -1,6 +1,6 @@
 {
   "name": "token-weaver",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -20,7 +20,8 @@
     "dev": "nodemon --exec tsx src/index.ts",
     "start": "node --import=tsx src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && node scripts/fix-dist-esm-imports.js dist",
-    "prepare": "if [ -d src ]; then npm run build; fi",
+    "build:lib": "rm -rf dist && tsc -p tsconfig.lib.json && node scripts/fix-dist-esm-imports.js dist",
+    "prepare": "if [ -d src ]; then npm run build:lib; fi",
     "setup": "bash scripts/setup.sh",
     "generate": "npm run gen-types && npm run gen-controllers",
     "gen-types": "npx openapi-typescript ./api/openapi.yaml -o ./src/types/schema.d.ts",

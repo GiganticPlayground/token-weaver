@@ -380,8 +380,12 @@ AUTH_STATIC_TOKEN=${SERVICE_TOKEN}
 ### Library install notes
 
 - The package builds itself on install via a `prepare` script (no committed `dist/`).
-  An **incremental** `npm/yarn add` in a consumer may skip `prepare` and leave `dist/`
-  empty; the fallback is `tsc -p node_modules/token-weaver/tsconfig.build.json`.
+  `prepare` runs `build:lib`, which compiles **only `src/auth/**`** (via `tsconfig.lib.json`)
+  — so a consumer install never needs the server's deps (e.g. `logra`). `npm run build`
+  remains the **full server** build used by Token Weaver's own Docker image / `npm start`.
+- An **incremental** `npm/yarn add` in a consumer may skip `prepare` and leave `dist/`
+  empty; the fallback is `tsc -p node_modules/token-weaver/tsconfig.lib.json` (the lib-only
+  build — **not** `tsconfig.build.json`, which would try to compile the server and fail).
 - `express` is a peer dependency (`^5`); the consumer provides it.
 - The emitted `.d.ts` use extensionless relative imports, which resolve under
   `moduleResolution: bundler`/`node16` typings; a strict `nodenext` consumer may need attention.

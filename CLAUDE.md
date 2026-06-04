@@ -85,8 +85,10 @@ verification-side feature (no issuing change). `createAuthMiddlewareFromEnv()` (
 builds the same middleware from `AUTH_*` env vars. All of this is additive: with no
 `requirements`/`paths`, behavior is unchanged.
 
-This dual purpose shapes the build (see Conventions): `tsconfig.build.json` emits `dist/` with
-`.d.ts`, and a `prepare` guard builds on git-install without breaking the Docker `npm ci`.
+This dual purpose splits the build (see Conventions): `build:lib` (`tsconfig.lib.json`) compiles
+**only `src/auth/**`** for consumers — keeping the server and its `logra` dependency out of the
+published bundle — while `build` (`tsconfig.build.json`) compiles the full server. A `prepare`
+guard runs `build:lib` on git-install without breaking the Docker `npm ci`.
 
 ### Cross-cutting middleware (`src/middlewares/`)
 
@@ -95,7 +97,10 @@ This dual purpose shapes the build (see Conventions): `tsconfig.build.json` emit
 ## Conventions and gotchas
 
 - **ESM build fix:** TypeScript emits extensionless relative imports that Node's ESM loader rejects, so `npm run build` runs `scripts/fix-dist-esm-imports.js` over `dist/` to append `.js`. Don't remove this step.
-- **Library packaging (app + lib in one `package.json`):** `npm run build` uses `tsconfig.build.json` (`rootDir: "."` so output stays at `dist/src/...` — the Dockerfile runs `dist/src/index.js`; `declaration: true`; excludes `tests`). The `prepare` script is an **inline shell guard** — `if [ -d src ]; then npm run build; fi` — so a git-install of the package builds itself, while the Docker `npm ci` (which runs before `COPY . .`, with no `src/`) skips cleanly. Do **not** move this guard into a `scripts/*.js` file (that file isn't copied yet at `npm ci` time → `Cannot find module`) and do **not** add `--ignore-scripts` to the Dockerfile (it would also suppress the `logra` git-dep's own `prepare`).
+- **Library packaging (app + lib in one `package.json`):** two builds share the `rootDir: "."` trick (so output stays at `dist/src/...` — the Dockerfile runs `dist/src/index.js`; `declaration: true`; excludes `tests`):
+  - `build` (`tsconfig.build.json`, `include: src/**`) — **full server**, used by the Docker image / `npm start`.
+  - `build:lib` (`tsconfig.lib.json`, `include: src/auth/**`) — **library only**. Compiling the whole server for a consumer would pull in `logra` (a server-only git dep) and fail on a clean install (`TS2307`); `src/auth/**` imports only `jose` + express types + node builtins, so `build:lib` builds in isolation.
+  - `prepare` is an **inline shell guard** — `if [ -d src ]; then npm run build:lib; fi` — so a git-install builds the lib itself, while the Docker `npm ci` (which runs before `COPY . .`, with no `src/`) skips cleanly. Do **not** move this guard into a `scripts/*.js` file (not copied yet at `npm ci` time → `Cannot find module`) and do **not** add `--ignore-scripts` to the Dockerfile (it would also suppress the `logra` git-dep's own `prepare`).
 - `"type": "module"` — this is an ESM project; use `import`, not `require`.
 - Config values support `${ENV_VAR}` placeholders, resolved recursively at load time (`resolveDeep` in `token-weaver.config.ts`); a referenced env var that is unset throws on startup. Use this for secrets rather than inlining them in YAML.
 - `config/keys/` and `config/token-weaver.yaml` are local-only (gitignored); only the `.example` files are tracked.
