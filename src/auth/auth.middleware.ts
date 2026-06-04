@@ -160,10 +160,10 @@ function buildAuthorizer(options: AuthMiddlewareOptions): Authorizer | undefined
  */
 function resolveVerifier(options: AuthMiddlewareOptions): RequestVerifier {
   switch (options.mode) {
-    case 'jwks': {
+    case 'jwt-jwks': {
       const { jwksUri, issuer, audience } = options;
-      if (!jwksUri) throw configError('jwksUri', 'jwks');
-      if (!issuer) throw configError('issuer', 'jwks');
+      if (!jwksUri) throw configError('jwksUri', 'jwt-jwks');
+      if (!issuer) throw configError('issuer', 'jwt-jwks');
 
       const jwks = createRemoteJWKSet(new URL(jwksUri));
       const verifyOptions = buildVerifyOptions(issuer, audience, 'RS256');
@@ -179,10 +179,10 @@ function resolveVerifier(options: AuthMiddlewareOptions): RequestVerifier {
       };
     }
 
-    case 'secret': {
+    case 'jwt-hs256': {
       const { secret, issuer, audience } = options;
-      if (!secret) throw configError('secret', 'secret');
-      if (!issuer) throw configError('issuer', 'secret');
+      if (!secret) throw configError('secret', 'jwt-hs256');
+      if (!issuer) throw configError('issuer', 'jwt-hs256');
 
       const key = new TextEncoder().encode(secret);
       const verifyOptions = buildVerifyOptions(issuer, audience, 'HS256');

@@ -4,11 +4,11 @@ import type { JWTPayload } from 'jose';
 /**
  * Verification mode. Exactly one is active per middleware instance.
  *
- * - `jwks`   — verify an RS256 JWT against a remote JWKS endpoint.
- * - `secret` — verify an HS256 JWT against a shared secret.
- * - `static` — constant-time compare the bearer value to a fixed token (no JWT).
+ * - `jwt-jwks`  — verify an RS256 JWT against a remote JWKS endpoint.
+ * - `jwt-hs256` — verify an HS256 JWT against a shared secret.
+ * - `static`    — constant-time compare the bearer value to a fixed token (no JWT).
  */
-export type AuthMode = 'jwks' | 'secret' | 'static';
+export type AuthMode = 'jwt-jwks' | 'jwt-hs256' | 'static';
 
 /**
  * Optional authorization requirement checked against the verified JWT payload.
@@ -44,9 +44,9 @@ export interface AuthMiddlewareOptions {
   issuer?: string;
   /** Optional audience check, applied to `jwks` and `secret`. */
   audience?: string;
-  /** Required when `mode === 'jwks'`. */
+  /** Required when `mode === 'jwt-jwks'`. */
   jwksUri?: string;
-  /** Required when `mode === 'secret'`. */
+  /** Required when `mode === 'jwt-hs256'`. */
   secret?: string;
   /** Required when `mode === 'static'`. */
   staticToken?: string;

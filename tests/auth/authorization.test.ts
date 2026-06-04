@@ -41,7 +41,7 @@ function signHs256(claims: Record<string, unknown>): Promise<string> {
 }
 
 function secretAuth(extra: Partial<Parameters<typeof createAuthMiddleware>[0]>): RequestHandler {
-  return createAuthMiddleware({ mode: 'secret', issuer: ISSUER, secret: SECRET, ...extra });
+  return createAuthMiddleware({ mode: 'jwt-hs256', issuer: ISSUER, secret: SECRET, ...extra });
 }
 
 function assertForbidden(result: RunResult): void {

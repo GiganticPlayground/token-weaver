@@ -242,7 +242,7 @@ import { createAuthMiddleware } from 'token-weaver/auth';
 // JWKS / RS256 (verifies against the issuer's published keys)
 app.use(
   createAuthMiddleware({
-    mode: 'jwks',
+    mode: 'jwt-jwks',
     issuer: 'https://token-weaver.example.com',
     jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
     audience: 'my-service', // optional
@@ -258,8 +258,8 @@ Three modes, exactly one per instance:
 
 | Mode | Verifies | Required options |
 | --- | --- | --- |
-| `jwks` | RS256 JWT against a remote JWKS | `issuer`, `jwksUri` |
-| `secret` | HS256 JWT against a shared secret | `issuer`, `secret` |
+| `jwt-jwks` | RS256 JWT against a remote JWKS | `issuer`, `jwksUri` |
+| `jwt-hs256` | HS256 JWT against a shared secret | `issuer`, `secret` |
 | `static` | constant-time compare of the bearer to a fixed token | `staticToken` |
 
 Behavior:
@@ -281,7 +281,7 @@ issues the JWT, and the middleware enforces them.**
 
 ```ts
 createAuthMiddleware({
-  mode: 'jwks',
+  mode: 'jwt-jwks',
   issuer: 'https://token-weaver.example.com',
   jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
   // every requirement must hold, or 403:
@@ -311,27 +311,71 @@ claims:
 
 ### Configuring from environment variables
 
-`createAuthMiddlewareFromEnv()` builds the same middleware from env vars (default prefix `AUTH_`;
-pass `{ prefix, env, onVerified }` to override). Mode-specific required fields are still validated
-fail-fast.
+`createAuthMiddlewareFromEnv()` builds the same middleware from environment variables instead of
+an inline options object. The variables are read from `process.env` **once, at the time you call
+the factory** (typically at startup), so make sure they're loaded first — the consuming app is
+responsible for populating its own environment (e.g. via its process manager, container env, or
+its own `dotenv` setup; this library does not call `dotenv`).
 
 ```ts
 import { createAuthMiddlewareFromEnv } from 'token-weaver/auth';
+
+// Reads AUTH_* from process.env and fails fast if the combination is invalid.
 app.use(createAuthMiddlewareFromEnv());
+```
+
+Pass `{ prefix, env, onVerified }` to override: `prefix` changes the `AUTH_` namespace (so several
+instances can coexist), `env` supplies an alternative source object, and `onVerified` is the
+post-verification hook (it can't be expressed as a string env var).
+
+```ts
+// Two independent gates from one process, plus a claim-mapping hook:
+app.use('/public', createAuthMiddlewareFromEnv({ prefix: 'PUBLIC_AUTH_' }));
+app.use('/admin', createAuthMiddlewareFromEnv({
+  prefix: 'ADMIN_AUTH_',
+  onVerified: (payload, req) => { req.userId = payload.sub; },
+}));
 ```
 
 | Env var (prefix `AUTH_`) | Maps to | Notes |
 | --- | --- | --- |
-| `AUTH_MODE` | `mode` | `jwks` \| `secret` \| `static` |
+| `AUTH_MODE` | `mode` | `jwt-jwks` \| `jwt-hs256` \| `static` |
 | `AUTH_ISSUER` | `issuer` | required for jwt modes |
 | `AUTH_AUDIENCE` | `audience` | optional |
-| `AUTH_JWKS_URI` | `jwksUri` | `jwks` mode |
-| `AUTH_SECRET` | `secret` | `secret` mode |
+| `AUTH_JWKS_URI` | `jwksUri` | `jwt-jwks` mode |
+| `AUTH_SECRET` | `secret` | `jwt-hs256` mode |
 | `AUTH_STATIC_TOKEN` | `staticToken` | `static` mode |
 | `AUTH_PATH_PREFIX` | `paths.pathPrefix` | optional |
 | `AUTH_WHITELIST_CLAIM` | `paths.whitelistClaim` | optional; enables `paths` |
 | `AUTH_BLACKLIST_CLAIM` | `paths.blacklistClaim` | optional; enables `paths` |
 | `AUTH_REQUIREMENTS` | `requirements` | JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]` |
+
+Empty strings are treated as unset. Worked examples:
+
+```bash
+# JWKS / RS256 — verify against Token Weaver's published keys, with path allow/deny + a scope gate
+AUTH_MODE=jwt-jwks
+AUTH_ISSUER=https://token-weaver.example.com
+AUTH_JWKS_URI=https://token-weaver.example.com/.well-known/jwks.json
+AUTH_AUDIENCE=my-service                 # optional
+AUTH_WHITELIST_CLAIM=whitelist           # read allowed path patterns from this token claim
+AUTH_BLACKLIST_CLAIM=blacklist           # blacklist wins over whitelist
+AUTH_PATH_PREFIX=/api                    # stripped from the request path before matching
+AUTH_REQUIREMENTS=[{"type":"scope","value":"nexus:read"}]
+```
+
+```bash
+# HS256 — shared secret
+AUTH_MODE=jwt-hs256
+AUTH_ISSUER=https://token-weaver.example.com
+AUTH_SECRET=${JWT_SHARED_SECRET}
+```
+
+```bash
+# Static bearer token — service-to-service without a JWT issuer
+AUTH_MODE=static
+AUTH_STATIC_TOKEN=${SERVICE_TOKEN}
+```
 
 ### Library install notes
 

@@ -72,7 +72,7 @@ exposed via the `./auth` subpath in `package.json` `exports` and consumed as
 
 Hard boundary: `src/auth/` imports **only** `jose` + Express types — never the server,
 controllers, services, strategies, or config. Importing the library must not pull the server
-into a consumer's module graph. Three modes (`jwks`/RS256, `secret`/HS256, `static`); on
+into a consumer's module graph. Three modes (`jwt-jwks`/RS256, `jwt-hs256`/HS256, `static`); on
 success it sets `req.jwtPayload` and calls an optional `onVerified` hook, on failure it passes
 a neutral `AuthError` (status 401) to `next()`. See `README.md` for the consumer API.
 

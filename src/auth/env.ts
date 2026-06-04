@@ -110,9 +110,9 @@ export function createAuthMiddlewareFromEnv(opts: FromEnvOptions = {}): RequestH
   };
 
   const mode = read('MODE');
-  if (mode !== 'jwks' && mode !== 'secret' && mode !== 'static') {
+  if (mode !== 'jwt-jwks' && mode !== 'jwt-hs256' && mode !== 'static') {
     throw new Error(
-      `createAuthMiddlewareFromEnv: ${prefix}MODE must be 'jwks', 'secret', or 'static' (got ${
+      `createAuthMiddlewareFromEnv: ${prefix}MODE must be 'jwt-jwks', 'jwt-hs256', or 'static' (got ${
         mode ?? 'undefined'
       })`,
     );

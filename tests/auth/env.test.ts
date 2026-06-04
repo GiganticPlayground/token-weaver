@@ -34,9 +34,9 @@ function signHs256(claims: Record<string, unknown>): Promise<string> {
 }
 
 void describe('createAuthMiddlewareFromEnv', () => {
-  void it('builds a secret-mode middleware from env vars', async () => {
+  void it('builds a jwt-hs256 middleware from env vars', async () => {
     const mw = createAuthMiddlewareFromEnv({
-      env: { AUTH_MODE: 'secret', AUTH_ISSUER: ISSUER, AUTH_SECRET: SECRET },
+      env: { AUTH_MODE: 'jwt-hs256', AUTH_ISSUER: ISSUER, AUTH_SECRET: SECRET },
     });
     const result = await runMiddleware(mw, { authorization: `Bearer ${await signHs256({})}` });
     assert.equal(result.error, undefined);
@@ -54,7 +54,7 @@ void describe('createAuthMiddlewareFromEnv', () => {
   void it('honors a custom prefix', async () => {
     const mw = createAuthMiddlewareFromEnv({
       prefix: 'MYAPP_',
-      env: { MYAPP_MODE: 'secret', MYAPP_ISSUER: ISSUER, MYAPP_SECRET: SECRET },
+      env: { MYAPP_MODE: 'jwt-hs256', MYAPP_ISSUER: ISSUER, MYAPP_SECRET: SECRET },
     });
     assert.equal(
       (await runMiddleware(mw, { authorization: `Bearer ${await signHs256({})}` })).error,
@@ -65,7 +65,7 @@ void describe('createAuthMiddlewareFromEnv', () => {
   void it('wires paths config and enforces it', async () => {
     const mw = createAuthMiddlewareFromEnv({
       env: {
-        AUTH_MODE: 'secret',
+        AUTH_MODE: 'jwt-hs256',
         AUTH_ISSUER: ISSUER,
         AUTH_SECRET: SECRET,
         AUTH_WHITELIST_CLAIM: 'whitelist',
@@ -81,7 +81,7 @@ void describe('createAuthMiddlewareFromEnv', () => {
   void it('parses AUTH_REQUIREMENTS JSON and enforces it', async () => {
     const mw = createAuthMiddlewareFromEnv({
       env: {
-        AUTH_MODE: 'secret',
+        AUTH_MODE: 'jwt-hs256',
         AUTH_ISSUER: ISSUER,
         AUTH_SECRET: SECRET,
         AUTH_REQUIREMENTS: JSON.stringify([{ type: 'scope', value: 'nexus:read' }]),
@@ -114,7 +114,7 @@ void describe('createAuthMiddlewareFromEnv', () => {
       () =>
         createAuthMiddlewareFromEnv({
           env: {
-            AUTH_MODE: 'secret',
+            AUTH_MODE: 'jwt-hs256',
             AUTH_ISSUER: ISSUER,
             AUTH_SECRET: SECRET,
             AUTH_REQUIREMENTS: '{not json',
@@ -126,7 +126,7 @@ void describe('createAuthMiddlewareFromEnv', () => {
 
   void it('throws when a required mode field is missing (delegated to createAuthMiddleware)', () => {
     assert.throws(
-      () => createAuthMiddlewareFromEnv({ env: { AUTH_MODE: 'secret', AUTH_ISSUER: ISSUER } }),
+      () => createAuthMiddlewareFromEnv({ env: { AUTH_MODE: 'jwt-hs256', AUTH_ISSUER: ISSUER } }),
       /secret/,
     );
   });

@@ -92,15 +92,15 @@ function signHs256(
 
 void describe('createAuthMiddleware option validation', () => {
   void it('throws when jwks mode lacks jwksUri', () => {
-    assert.throws(() => createAuthMiddleware({ mode: 'jwks', issuer: ISSUER }), /jwksUri/);
+    assert.throws(() => createAuthMiddleware({ mode: 'jwt-jwks', issuer: ISSUER }), /jwksUri/);
   });
 
   void it('throws when jwt modes lack issuer', () => {
-    assert.throws(() => createAuthMiddleware({ mode: 'secret', secret: SECRET }), /issuer/);
+    assert.throws(() => createAuthMiddleware({ mode: 'jwt-hs256', secret: SECRET }), /issuer/);
   });
 
   void it('throws when secret mode lacks secret', () => {
-    assert.throws(() => createAuthMiddleware({ mode: 'secret', issuer: ISSUER }), /secret/);
+    assert.throws(() => createAuthMiddleware({ mode: 'jwt-hs256', issuer: ISSUER }), /secret/);
   });
 
   void it('throws when static mode lacks staticToken', () => {
@@ -110,11 +110,11 @@ void describe('createAuthMiddleware option validation', () => {
 
 // --- jwks mode (RS256) ----------------------------------------------------------
 
-void describe('jwks mode', () => {
+void describe('jwt-jwks mode', () => {
   void it('accepts a valid RS256 token and attaches the payload', async () => {
     let hookPayloadSub: unknown;
     const middleware = createAuthMiddleware({
-      mode: 'jwks',
+      mode: 'jwt-jwks',
       issuer: ISSUER,
       jwksUri,
       onVerified: (payload) => {
@@ -133,7 +133,7 @@ void describe('jwks mode', () => {
 
   void it('enforces audience when configured', async () => {
     const middleware = createAuthMiddleware({
-      mode: 'jwks',
+      mode: 'jwt-jwks',
       issuer: ISSUER,
       audience: AUDIENCE,
       jwksUri,
@@ -147,7 +147,7 @@ void describe('jwks mode', () => {
   });
 
   void it('rejects a token signed by an unknown key', async () => {
-    const middleware = createAuthMiddleware({ mode: 'jwks', issuer: ISSUER, jwksUri });
+    const middleware = createAuthMiddleware({ mode: 'jwt-jwks', issuer: ISSUER, jwksUri });
     const foreign = await new SignJWT({})
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer(ISSUER)
@@ -159,16 +159,16 @@ void describe('jwks mode', () => {
   });
 
   void it('rejects an HS256 token (wrong algorithm)', async () => {
-    const middleware = createAuthMiddleware({ mode: 'jwks', issuer: ISSUER, jwksUri });
+    const middleware = createAuthMiddleware({ mode: 'jwt-jwks', issuer: ISSUER, jwksUri });
     assertUnauthorized(await runMiddleware(middleware, `Bearer ${await signHs256({})}`));
   });
 });
 
 // --- secret mode (HS256) --------------------------------------------------------
 
-void describe('secret mode', () => {
+void describe('jwt-hs256 mode', () => {
   void it('accepts a valid HS256 token', async () => {
-    const middleware = createAuthMiddleware({ mode: 'secret', issuer: ISSUER, secret: SECRET });
+    const middleware = createAuthMiddleware({ mode: 'jwt-hs256', issuer: ISSUER, secret: SECRET });
     const { error, req } = await runMiddleware(middleware, `Bearer ${await signHs256({})}`);
 
     assert.equal(error, undefined);
@@ -176,21 +176,21 @@ void describe('secret mode', () => {
   });
 
   void it('rejects a token signed with a different secret', async () => {
-    const middleware = createAuthMiddleware({ mode: 'secret', issuer: ISSUER, secret: SECRET });
+    const middleware = createAuthMiddleware({ mode: 'jwt-hs256', issuer: ISSUER, secret: SECRET });
     const wrong = await signHs256({}, { secret: 'a-totally-different-secret-value' });
 
     assertUnauthorized(await runMiddleware(middleware, `Bearer ${wrong}`));
   });
 
   void it('rejects a wrong issuer', async () => {
-    const middleware = createAuthMiddleware({ mode: 'secret', issuer: ISSUER, secret: SECRET });
+    const middleware = createAuthMiddleware({ mode: 'jwt-hs256', issuer: ISSUER, secret: SECRET });
     const wrong = await signHs256({}, { issuer: 'https://evil.test' });
 
     assertUnauthorized(await runMiddleware(middleware, `Bearer ${wrong}`));
   });
 
   void it('rejects an RS256 token (wrong algorithm)', async () => {
-    const middleware = createAuthMiddleware({ mode: 'secret', issuer: ISSUER, secret: SECRET });
+    const middleware = createAuthMiddleware({ mode: 'jwt-hs256', issuer: ISSUER, secret: SECRET });
     assertUnauthorized(await runMiddleware(middleware, `Bearer ${await signRs256({})}`));
   });
 });
