@@ -225,6 +225,61 @@ npm run format:check
 npm run validate
 ```
 
+## Auth Verification Middleware (library)
+
+Token Weaver **issues** JWTs; downstream services **verify** them. The verification
+logic is also published as a small, framework-light Express middleware so consumers
+don't reimplement it. It is exposed on a dedicated subpath that pulls in only `jose`
+— importing it does **not** load the Token Weaver server or its dependencies.
+
+```bash
+npm install github:GiganticPlayground/token-weaver#semver:^1.0.0
+```
+
+```ts
+import { createAuthMiddleware } from 'token-weaver/auth';
+
+// JWKS / RS256 (verifies against the issuer's published keys)
+app.use(
+  createAuthMiddleware({
+    mode: 'jwks',
+    issuer: 'https://token-weaver.example.com',
+    jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
+    audience: 'my-service', // optional
+    onVerified: (payload, req) => {
+      // Map claims onto your own request shape; the lib stays consumer-agnostic.
+      req.auth = { userId: payload.sub };
+    },
+  }),
+);
+```
+
+Three modes, exactly one per instance:
+
+| Mode | Verifies | Required options |
+| --- | --- | --- |
+| `jwks` | RS256 JWT against a remote JWKS | `issuer`, `jwksUri` |
+| `secret` | HS256 JWT against a shared secret | `issuer`, `secret` |
+| `static` | constant-time compare of the bearer to a fixed token | `staticToken` |
+
+Behavior:
+- Reads `Authorization: Bearer <token>`; missing/malformed → `401`.
+- On success attaches the decoded payload to `req.jwtPayload` and awaits the optional
+  `onVerified(payload, req)` hook, then calls `next()`. For `static` mode the payload is `{}`.
+- On any failure (expired, bad signature, wrong issuer/audience, missing token) it calls
+  `next(err)` with a framework-neutral `AuthError` carrying `status: 401`, so your own
+  error middleware renders the response.
+- Options are validated at construction time and **fail fast** on an inconsistent combination.
+
+### Library install notes
+
+- The package builds itself on install via a `prepare` script (no committed `dist/`).
+  An **incremental** `npm/yarn add` in a consumer may skip `prepare` and leave `dist/`
+  empty; the fallback is `tsc -p node_modules/token-weaver/tsconfig.build.json`.
+- `express` is a peer dependency (`^5`); the consumer provides it.
+- The emitted `.d.ts` use extensionless relative imports, which resolve under
+  `moduleResolution: bundler`/`node16` typings; a strict `nodenext` consumer may need attention.
+
 ## Implementation Layout
 
 - [src/controllers/authController.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/controllers/authController.ts): auth and JWKS endpoints
