@@ -225,6 +225,167 @@ npm run format:check
 npm run validate
 ```
 
+## Auth Verification Middleware (library)
+
+Token Weaver **issues** JWTs; downstream services **verify** them. The verification
+logic is also published as a small, framework-light Express middleware so consumers
+don't reimplement it. It is exposed on a dedicated subpath that pulls in only `jose`
+— importing it does **not** load the Token Weaver server or its dependencies.
+
+```bash
+npm install github:GiganticPlayground/token-weaver#semver:^1.0.0
+```
+
+```ts
+import { createAuthMiddleware } from 'token-weaver/auth';
+
+// JWKS / RS256 (verifies against the issuer's published keys)
+app.use(
+  createAuthMiddleware({
+    mode: 'jwt-jwks',
+    issuer: 'https://token-weaver.example.com',
+    jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
+    audience: 'my-service', // optional
+    onVerified: (payload, req) => {
+      // Map claims onto your own request shape; the lib stays consumer-agnostic.
+      req.auth = { userId: payload.sub };
+    },
+  }),
+);
+```
+
+Three modes, exactly one per instance:
+
+| Mode | Verifies | Required options |
+| --- | --- | --- |
+| `jwt-jwks` | RS256 JWT against a remote JWKS | `issuer`, `jwksUri` |
+| `jwt-hs256` | HS256 JWT against a shared secret | `issuer`, `secret` |
+| `static` | constant-time compare of the bearer to a fixed token | `staticToken` |
+
+Behavior:
+- Reads `Authorization: Bearer <token>`; missing/malformed → `401`.
+- On success attaches the decoded payload to `req.jwtPayload` and awaits the optional
+  `onVerified(payload, req)` hook, then calls `next()`. For `static` mode the payload is `{}`.
+- On any failure (expired, bad signature, wrong issuer/audience, missing token) it calls
+  `next(err)` with a framework-neutral `AuthError` carrying `status: 401`, so your own
+  error middleware renders the response.
+- Options are validated at construction time and **fail fast** on an inconsistent combination.
+
+### Optional authorization (requirements & path allow/deny)
+
+Beyond authenticating the token, the middleware can optionally **authorize** the request against
+the token's own claims. These are opt-in — omit them and the middleware only authenticates.
+Authorization failures pass a `ForbiddenError` (status `403`) to `next()`; `static` mode skips
+authorization (no claims). The model: **Token Weaver defines access by embedding claims when it
+issues the JWT, and the middleware enforces them.**
+
+```ts
+createAuthMiddleware({
+  mode: 'jwt-jwks',
+  issuer: 'https://token-weaver.example.com',
+  jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
+  // every requirement must hold, or 403:
+  requirements: [
+    { type: 'scope', value: 'nexus:read' },                       // token.scope must include it
+    { type: 'claim_includes', claim: 'permissions', value: 'data:read' },
+  ],
+  // per-endpoint allow/deny, with the patterns carried in the token's claims:
+  paths: {
+    pathPrefix: '/api',        // stripped from req.baseUrl+req.path before matching
+    whitelistClaim: 'whitelist', // if present on the token, one pattern must match (glob * supported)
+    blacklistClaim: 'blacklist', // any match denies — blacklist wins over whitelist
+  },
+});
+```
+
+A Token Weaver strategy issues those claims like any other (see Direct/Delegated claims mapping):
+
+```yaml
+claims:
+  sub: $.response.body.userId
+  scope:
+    - nexus:read
+  whitelist:
+    - /nexus/*
+```
+
+### Configuring from environment variables
+
+`createAuthMiddlewareFromEnv()` builds the same middleware from environment variables instead of
+an inline options object. The variables are read from `process.env` **once, at the time you call
+the factory** (typically at startup), so make sure they're loaded first — the consuming app is
+responsible for populating its own environment (e.g. via its process manager, container env, or
+its own `dotenv` setup; this library does not call `dotenv`).
+
+```ts
+import { createAuthMiddlewareFromEnv } from 'token-weaver/auth';
+
+// Reads AUTH_* from process.env and fails fast if the combination is invalid.
+app.use(createAuthMiddlewareFromEnv());
+```
+
+Pass `{ prefix, env, onVerified }` to override: `prefix` changes the `AUTH_` namespace (so several
+instances can coexist), `env` supplies an alternative source object, and `onVerified` is the
+post-verification hook (it can't be expressed as a string env var).
+
+```ts
+// Two independent gates from one process, plus a claim-mapping hook:
+app.use('/public', createAuthMiddlewareFromEnv({ prefix: 'PUBLIC_AUTH_' }));
+app.use('/admin', createAuthMiddlewareFromEnv({
+  prefix: 'ADMIN_AUTH_',
+  onVerified: (payload, req) => { req.userId = payload.sub; },
+}));
+```
+
+| Env var (prefix `AUTH_`) | Maps to | Notes |
+| --- | --- | --- |
+| `AUTH_MODE` | `mode` | `jwt-jwks` \| `jwt-hs256` \| `static` |
+| `AUTH_ISSUER` | `issuer` | required for jwt modes |
+| `AUTH_AUDIENCE` | `audience` | optional |
+| `AUTH_JWKS_URI` | `jwksUri` | `jwt-jwks` mode |
+| `AUTH_SECRET` | `secret` | `jwt-hs256` mode |
+| `AUTH_STATIC_TOKEN` | `staticToken` | `static` mode |
+| `AUTH_PATH_PREFIX` | `paths.pathPrefix` | optional |
+| `AUTH_WHITELIST_CLAIM` | `paths.whitelistClaim` | optional; enables `paths` |
+| `AUTH_BLACKLIST_CLAIM` | `paths.blacklistClaim` | optional; enables `paths` |
+| `AUTH_REQUIREMENTS` | `requirements` | JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]` |
+
+Empty strings are treated as unset. Worked examples:
+
+```bash
+# JWKS / RS256 — verify against Token Weaver's published keys, with path allow/deny + a scope gate
+AUTH_MODE=jwt-jwks
+AUTH_ISSUER=https://token-weaver.example.com
+AUTH_JWKS_URI=https://token-weaver.example.com/.well-known/jwks.json
+AUTH_AUDIENCE=my-service                 # optional
+AUTH_WHITELIST_CLAIM=whitelist           # read allowed path patterns from this token claim
+AUTH_BLACKLIST_CLAIM=blacklist           # blacklist wins over whitelist
+AUTH_PATH_PREFIX=/api                    # stripped from the request path before matching
+AUTH_REQUIREMENTS=[{"type":"scope","value":"nexus:read"}]
+```
+
+```bash
+# HS256 — shared secret
+AUTH_MODE=jwt-hs256
+AUTH_ISSUER=https://token-weaver.example.com
+AUTH_SECRET=${JWT_SHARED_SECRET}
+```
+
+```bash
+# Static bearer token — service-to-service without a JWT issuer
+AUTH_MODE=static
+AUTH_STATIC_TOKEN=${SERVICE_TOKEN}
+```
+
+### Library install notes
+
+- The package builds itself on install via a `prepare` script (no committed `dist/`).
+  An **incremental** `npm/yarn add` in a consumer may skip `prepare` and leave `dist/`
+  empty; the fallback is `tsc -p node_modules/token-weaver/tsconfig.build.json`.
+- `express` is a peer dependency (`^5`); the consumer provides it.
+- The emitted `.d.ts` use extensionless relative imports, which resolve under
+  `moduleResolution: bundler`/`node16` typings; a strict `nodenext` consumer may need attention.
+
 ## Implementation Layout
 
 - [src/controllers/authController.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/controllers/authController.ts): auth and JWKS endpoints
