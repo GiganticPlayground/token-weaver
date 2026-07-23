@@ -254,7 +254,7 @@ app.use(
 );
 ```
 
-Three modes, exactly one per instance:
+Three modes (a single instance uses one; combine several via `strategies` — see below):
 
 | Mode | Verifies | Required options |
 | --- | --- | --- |
@@ -271,13 +271,48 @@ Behavior:
   error middleware renders the response.
 - Options are validated at construction time and **fail fast** on an inconsistent combination.
 
+### Multiple strategies (accept more than one at once)
+
+Instead of a single strategy, pass a **`strategies`** array. Each entry is a full single-strategy
+option object (its own `mode`, keys, `requirements`, `paths`). Incoming requests are tried against
+each strategy **in order** and the **first that accepts wins**; the shared `onVerified` then runs
+once for the winner. If every strategy rejects, the most informative failure is surfaced — a `403`
+(authenticated but not authorized) is preferred over a `401`.
+
+This lets one deployment accept several token schemes simultaneously — e.g. an internal static
+service token **and** client JWTs:
+
+```ts
+createAuthMiddleware({
+  strategies: [
+    { mode: 'static', staticToken: process.env.INTERNAL_TOKEN,
+      paths: { whitelist: ['/qodi/decrypt'] } },       // internal service: decrypt only
+    { mode: 'jwt-jwks', issuer: 'token-weaver',
+      jwksUri: process.env.JWKS_URL },                  // clients: token-weaver JWTs
+  ],
+  onVerified: (payload, req) => { req.auth = { userId: payload.sub }; },
+});
+```
+
 ### Optional authorization (requirements & path allow/deny)
 
-Beyond authenticating the token, the middleware can optionally **authorize** the request against
-the token's own claims. These are opt-in — omit them and the middleware only authenticates.
-Authorization failures pass a `ForbiddenError` (status `403`) to `next()`; `static` mode skips
-authorization (no claims). The model: **Token Weaver defines access by embedding claims when it
-issues the JWT, and the middleware enforces them.**
+Beyond authenticating the token, the middleware can optionally **authorize** the request. These
+are opt-in — omit them and the middleware only authenticates. Authorization failures pass a
+`ForbiddenError` (status `403`) to `next()`. The model: **Token Weaver defines access by embedding
+claims when it issues the JWT, and the middleware enforces them.**
+
+`requirements` are claim-based, so they are skipped in `static` mode. `paths` supports two pattern
+sources: **claim-based** (`whitelistClaim`/`blacklistClaim`, JWT modes only) and **inline**
+(`whitelist`/`blacklist` arrays, declared in config). Inline patterns need no claims, so they are
+the way to scope a **`static`** token to specific paths:
+
+```ts
+createAuthMiddleware({
+  mode: 'static',
+  staticToken: process.env.INTERNAL_TOKEN,
+  paths: { whitelist: ['/qodi/decrypt'] },  // this static token may ONLY hit /qodi/decrypt
+});
+```
 
 ```ts
 createAuthMiddleware({

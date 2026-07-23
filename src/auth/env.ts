@@ -14,12 +14,34 @@ export interface FromEnvOptions {
   onVerified?: AuthMiddlewareOptions['onVerified'];
 }
 
+/** Parse a comma-separated pattern list, trimming blanks. Returns undefined when unset. */
+function readPatternList(read: EnvReader, name: string): string[] | undefined {
+  const raw = read(name);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const patterns = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return patterns.length > 0 ? patterns : undefined;
+}
+
 function readPaths(read: EnvReader): AuthPaths | undefined {
   const pathPrefix = read('PATH_PREFIX');
   const whitelistClaim = read('WHITELIST_CLAIM');
   const blacklistClaim = read('BLACKLIST_CLAIM');
+  // Inline patterns (comma-separated) — usable without JWT claims, e.g. to scope a static token.
+  const whitelist = readPatternList(read, 'WHITELIST');
+  const blacklist = readPatternList(read, 'BLACKLIST');
 
-  if (pathPrefix === undefined && whitelistClaim === undefined && blacklistClaim === undefined) {
+  if (
+    pathPrefix === undefined &&
+    whitelistClaim === undefined &&
+    blacklistClaim === undefined &&
+    whitelist === undefined &&
+    blacklist === undefined
+  ) {
     return undefined;
   }
 
@@ -27,6 +49,8 @@ function readPaths(read: EnvReader): AuthPaths | undefined {
   if (pathPrefix !== undefined) paths.pathPrefix = pathPrefix;
   if (whitelistClaim !== undefined) paths.whitelistClaim = whitelistClaim;
   if (blacklistClaim !== undefined) paths.blacklistClaim = blacklistClaim;
+  if (whitelist !== undefined) paths.whitelist = whitelist;
+  if (blacklist !== undefined) paths.blacklist = blacklist;
   return paths;
 }
 
@@ -95,8 +119,9 @@ function readRequirements(read: EnvReader, prefix: string): AuthRequirement[] {
  *
  * Reads (with the configurable `prefix`, default `AUTH_`):
  * `MODE`, `ISSUER`, `AUDIENCE`, `JWKS_URI`, `SECRET`, `STATIC_TOKEN`,
- * `PATH_PREFIX`, `WHITELIST_CLAIM`, `BLACKLIST_CLAIM`, and `REQUIREMENTS`
- * (a JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]`).
+ * `PATH_PREFIX`, `WHITELIST_CLAIM`, `BLACKLIST_CLAIM`, `WHITELIST`/`BLACKLIST`
+ * (comma-separated inline path patterns, usable in `static` mode), and
+ * `REQUIREMENTS` (a JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]`).
  *
  * Mode-specific required fields are validated by `createAuthMiddleware` (fail fast).
  */
