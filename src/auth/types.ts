@@ -21,13 +21,24 @@ export type AuthRequirement =
   | { type: 'claim_includes'; claim: string; value: string };
 
 /**
- * Optional path allow/deny configuration. The allow/deny patterns themselves live in the
- * token's claims (named by `whitelistClaim`/`blacklistClaim`) — this only names which claims
- * to read and how to normalize the request path. Glob `*` is supported in patterns.
+ * Optional path allow/deny configuration. Glob `*` is supported in patterns.
+ *
+ * Patterns can come from two sources:
+ * - **Inline** (`whitelist`/`blacklist`) — fixed patterns declared in config. These need no
+ *   JWT claims, so they are the way to scope a `static` token to specific paths.
+ * - **Claim-based** (`whitelistClaim`/`blacklistClaim`) — names of JWT claims that carry the
+ *   patterns; only meaningful for the JWT modes (a `static` token has no claims).
+ *
+ * When both an inline list and a claim are given for the same side, the inline list takes
+ * precedence. A blacklist match always wins over the whitelist.
  */
 export interface AuthPaths {
   /** Stripped from the request path before matching (e.g. a mount prefix). */
   pathPrefix?: string;
+  /** Inline allowed path patterns. If present, at least one must match. */
+  whitelist?: string[];
+  /** Inline denied path patterns. A match denies (wins over the whitelist). */
+  blacklist?: string[];
   /** Claim holding allowed path patterns. If present on the token, at least one must match. */
   whitelistClaim?: string;
   /** Claim holding denied path patterns. A match denies (wins over the whitelist). */
@@ -56,8 +67,10 @@ export interface AuthMiddlewareOptions {
    */
   requirements?: AuthRequirement[];
   /**
-   * Optional per-endpoint allow/deny enforced against the token's claims. Ignored in `static`
-   * mode. A request that resolves to a denied path is rejected with 403.
+   * Optional per-endpoint allow/deny. For JWT modes the patterns come from the token's claims
+   * (`whitelistClaim`/`blacklistClaim`) and/or inline lists; for `static` mode only the inline
+   * `whitelist`/`blacklist` apply (no claims). A request that resolves to a denied path is
+   * rejected with 403.
    */
   paths?: AuthPaths;
   /**
@@ -65,6 +78,25 @@ export interface AuthMiddlewareOptions {
    * map claims onto its own request shape without the library hard-coding them. For `static`
    * mode the payload is an empty object.
    */
+  onVerified?: (payload: JWTPayload, req: Request) => void | Promise<void>;
+}
+
+/**
+ * A single verification strategy — the same shape as {@link AuthMiddlewareOptions} minus the
+ * shared `onVerified` hook (which lives on {@link MultiStrategyAuthOptions} so it runs once for
+ * whichever strategy wins).
+ */
+export type AuthStrategyOptions = Omit<AuthMiddlewareOptions, 'onVerified'>;
+
+/**
+ * Options for a multi-strategy middleware: several verification strategies tried in order until
+ * one accepts the request (the first success wins). Lets a single deployment accept, say, an
+ * internal static token AND client JWTs at once. If every strategy rejects, the most informative
+ * failure is surfaced — a 403 (authenticated but not authorized) preferred over a 401.
+ */
+export interface MultiStrategyAuthOptions {
+  strategies: AuthStrategyOptions[];
+  /** Runs once, after whichever strategy accepts the request. */
   onVerified?: (payload: JWTPayload, req: Request) => void | Promise<void>;
 }
 

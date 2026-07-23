@@ -11,6 +11,8 @@ import {
   type AuthMiddlewareOptions,
   type AuthPaths,
   type AuthRequirement,
+  type AuthStrategyOptions,
+  type MultiStrategyAuthOptions,
 } from './types';
 
 /** A resolved per-request verifier: returns the decoded payload or throws AuthError. */
@@ -98,6 +100,25 @@ function buildPathRegex(patterns: string[]): RegExp {
   return new RegExp(alternation, 'i');
 }
 
+/**
+ * Resolve an effective pattern list from an inline list and/or a claim name. Inline patterns
+ * take precedence; otherwise the named claim is read from the payload. Returns `null` when
+ * neither source is active (meaning "no list configured" — unrestricted for that side).
+ */
+function resolvePatternList(
+  inline: string[] | undefined,
+  claimName: string | undefined,
+  payload: JWTPayload,
+): string[] | null {
+  if (inline !== undefined) {
+    return inline;
+  }
+  if (claimName !== undefined && payload[claimName] !== undefined) {
+    return toStringArray(payload[claimName]);
+  }
+  return null;
+}
+
 function checkPaths(reqPath: string, payload: JWTPayload, paths: AuthPaths): boolean {
   let testPath = reqPath;
   if (paths.pathPrefix && testPath.startsWith(paths.pathPrefix)) {
@@ -105,14 +126,8 @@ function checkPaths(reqPath: string, payload: JWTPayload, paths: AuthPaths): boo
   }
   testPath = normalizePath(testPath);
 
-  const whitelist =
-    paths.whitelistClaim !== undefined && payload[paths.whitelistClaim] !== undefined
-      ? toStringArray(payload[paths.whitelistClaim])
-      : null;
-  const blacklist =
-    paths.blacklistClaim !== undefined && payload[paths.blacklistClaim] !== undefined
-      ? toStringArray(payload[paths.blacklistClaim])
-      : null;
+  const whitelist = resolvePatternList(paths.whitelist, paths.whitelistClaim, payload);
+  const blacklist = resolvePatternList(paths.blacklist, paths.blacklistClaim, payload);
 
   // Whitelist: if present, at least one pattern must match (an empty whitelist denies all).
   if (whitelist !== null && (whitelist.length === 0 || !buildPathRegex(whitelist).test(testPath))) {
@@ -129,10 +144,14 @@ function checkPaths(reqPath: string, payload: JWTPayload, paths: AuthPaths): boo
 
 /**
  * Build the optional authorizer from `requirements`/`paths`. Returns `undefined` when no
- * authorization is configured (pure authentication). Not used in `static` mode.
+ * authorization is configured (pure authentication).
+ *
+ * `requirements` are claim-based, so they are skipped in `static` mode (no claims). `paths`
+ * still applies in `static` mode via its inline `whitelist`/`blacklist` (claim-based path
+ * lists resolve to nothing without a token, i.e. unrestricted).
  */
-function buildAuthorizer(options: AuthMiddlewareOptions): Authorizer | undefined {
-  const requirements = options.requirements ?? [];
+function buildAuthorizer(options: AuthStrategyOptions): Authorizer | undefined {
+  const requirements = options.mode === 'static' ? [] : (options.requirements ?? []);
   const { paths } = options;
   if (requirements.length === 0 && !paths) {
     return undefined;
@@ -158,7 +177,7 @@ function buildAuthorizer(options: AuthMiddlewareOptions): Authorizer | undefined
  * Validate options and build the per-request verifier once. Throws a plain
  * Error on an inconsistent option combination (programmer error, fail fast).
  */
-function resolveVerifier(options: AuthMiddlewareOptions): RequestVerifier {
+function resolveVerifier(options: AuthStrategyOptions): RequestVerifier {
   switch (options.mode) {
     case 'jwt-jwks': {
       const { jwksUri, issuer, audience } = options;
@@ -219,39 +238,99 @@ function resolveVerifier(options: AuthMiddlewareOptions): RequestVerifier {
   }
 }
 
-async function authenticate(
-  verify: RequestVerifier,
-  authorize: Authorizer | undefined,
-  onVerified: AuthMiddlewareOptions['onVerified'],
-  req: Request,
-): Promise<void> {
-  const payload = await verify(req);
-  if (authorize) {
-    authorize(payload, req);
-  }
-  req.jwtPayload = payload;
-  if (onVerified) {
-    await onVerified(payload, req);
-  }
+/** A verify + optional authorize pair compiled once from a single strategy. */
+interface CompiledStrategy {
+  verify: RequestVerifier;
+  authorize: Authorizer | undefined;
+}
+
+function compileStrategy(options: AuthStrategyOptions): CompiledStrategy {
+  return { verify: resolveVerifier(options), authorize: buildAuthorizer(options) };
+}
+
+/** HTTP status carried by AuthError/ForbiddenError; defaults to 401 for anything unexpected. */
+function statusOf(error: unknown): number {
+  return typeof (error as { status?: unknown }).status === 'number'
+    ? (error as { status: number }).status
+    : 401;
 }
 
 /**
- * Create a configurable JWT-verification Express middleware. Exactly one mode
- * is active per instance. On success the decoded payload is attached to
- * `req.jwtPayload` and `onVerified` (if provided) is awaited.
+ * Try each strategy in order. The first whose verification AND authorization both pass wins:
+ * its payload is attached and the shared `onVerified` runs. If none pass, the most informative
+ * failure is thrown — a 403 (authenticated but not authorized) is preferred over a 401.
  *
- * Failures are passed to `next()` as framework-neutral errors: a 401
- * {@link AuthError} for authentication (missing/invalid token), or a 403
- * {@link ForbiddenError} for authorization (`requirements`/`paths` not met).
- * Authorization is skipped in `static` mode (no claims to check).
+ * `onVerified` runs only for the winning strategy and its errors propagate directly (a consumer
+ * rejection is final — we do not fall through to another strategy).
  */
-export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
-  const verify = resolveVerifier(options);
-  const authorize = options.mode === 'static' ? undefined : buildAuthorizer(options);
+async function authenticateAny(
+  strategies: CompiledStrategy[],
+  onVerified: MultiStrategyAuthOptions['onVerified'],
+  req: Request,
+): Promise<void> {
+  let bestFailure: { status: number; error: Error } | null = null;
+
+  for (const { verify, authorize } of strategies) {
+    let payload: JWTPayload;
+    try {
+      payload = await verify(req);
+      if (authorize) {
+        authorize(payload, req);
+      }
+    } catch (caught) {
+      // verify/authorize only throw AuthError/ForbiddenError; coerce defensively so we always
+      // re-throw a real Error (and satisfy no-throw-literal).
+      const error = caught instanceof Error ? caught : new AuthError(String(caught));
+      const status = statusOf(error);
+      if (bestFailure === null || (bestFailure.status !== 403 && status === 403)) {
+        bestFailure = { status, error };
+      }
+      continue;
+    }
+
+    // Committed to this strategy — verification + authorization passed.
+    req.jwtPayload = payload;
+    if (onVerified) {
+      await onVerified(payload, req);
+    }
+    return;
+  }
+
+  throw bestFailure?.error ?? new AuthError('Authentication failed');
+}
+
+/**
+ * Create a configurable JWT-verification Express middleware.
+ *
+ * Accepts either a **single** strategy ({@link AuthMiddlewareOptions}) or **multiple**
+ * strategies ({@link MultiStrategyAuthOptions}) tried in order until one accepts the request.
+ * On success the decoded payload is attached to `req.jwtPayload` and `onVerified` (if provided)
+ * is awaited once for the winning strategy.
+ *
+ * Failures are passed to `next()` as framework-neutral errors: a 401 {@link AuthError} for
+ * authentication (missing/invalid token), or a 403 {@link ForbiddenError} for authorization
+ * (`requirements`/`paths` not met). With multiple strategies, the surfaced failure prefers a
+ * 403 over a 401. Claim-based `requirements` are skipped in `static` mode; inline `paths`
+ * (`whitelist`/`blacklist`) still apply.
+ */
+export function createAuthMiddleware(
+  options: AuthMiddlewareOptions | MultiStrategyAuthOptions,
+): RequestHandler {
+  const strategies: CompiledStrategy[] = [];
+  if ('strategies' in options) {
+    if (options.strategies.length === 0) {
+      throw new Error('createAuthMiddleware: strategies must be a non-empty array');
+    }
+    for (const strategy of options.strategies) {
+      strategies.push(compileStrategy(strategy));
+    }
+  } else {
+    strategies.push(compileStrategy(options));
+  }
   const { onVerified } = options;
 
   return (req: Request, _res: Response, next: NextFunction): void => {
-    void authenticate(verify, authorize, onVerified, req).then(
+    void authenticateAny(strategies, onVerified, req).then(
       () => next(),
       (error: unknown) => next(error),
     );

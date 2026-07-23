@@ -7,5 +7,12 @@
 export { createAuthMiddleware } from './auth.middleware';
 export { createAuthMiddlewareFromEnv, type FromEnvOptions } from './env';
 export { AuthError, ForbiddenError } from './types';
-export type { AuthMiddlewareOptions, AuthMode, AuthPaths, AuthRequirement } from './types';
+export type {
+  AuthMiddlewareOptions,
+  AuthMode,
+  AuthPaths,
+  AuthRequirement,
+  AuthStrategyOptions,
+  MultiStrategyAuthOptions,
+} from './types';
 export type { JWTPayload } from 'jose';
