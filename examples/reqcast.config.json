@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "sampleRate": 1,
+  "capture": { "requestBody": false, "responseBody": false },
+  "filters": {
+    "includePaths": ["/auth/**"],
+    "excludePaths": ["/health", "/.well-known/**", "/api-docs/**"]
+  },
+  "format": {
+    "fields": {
+      "ts": "timestamp",
+      "requestId": "requestId",
+      "durationMs": "durationMs",
+      "request": { "method": "request.method", "path": "request.path", "ip": "request.ip" },
+      "response": { "status": "response.statusCode" }
+    }
+  },
+  "sinks": [{ "type": "log", "level": "info", "message": "request analytics" }]
+}

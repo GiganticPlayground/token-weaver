@@ -80,6 +80,9 @@ export const envSchema = z.object({
   TOKEN_WEAVER_PRIVATE_KEY_PATH: z.string().optional(),
   TOKEN_WEAVER_PRIVATE_KEY: z.string().optional(),
   TOKEN_WEAVER_KID: z.string().optional().default('token-weaver-key'),
+  // Request analytics (reqcast) — path to a reqcast.config.json; analytics stay
+  // disabled when unset and no ./reqcast.config.json exists.
+  REQCAST_CONFIG: z.string().optional(),
   SHUTDOWN_TIMEOUT_MS: z
     .string()
     .transform((val) => parseInt(val, 10))

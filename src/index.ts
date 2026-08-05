@@ -14,7 +14,7 @@ import {
   errorHandlerMiddleware,
   requestContextMiddleware,
 } from './middlewares/index';
-import { logger } from './utils/index';
+import { buildAnalytics, logger } from './utils/index';
 import { setupShutdown } from './utils/shutdown';
 
 // Load OpenAPI specification
@@ -39,6 +39,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestContextMiddleware);
 
+const analytics = buildAnalytics();
+if (analytics?.enabled) {
+  app.use(analytics.middleware);
+  logger.info('request analytics enabled');
+}
+
 if (config.API_DOCS_ENABLED) {
   app.use(
     '/api-docs',
@@ -61,4 +67,4 @@ const server = app.listen(config.PORT, () => {
   logger.info(`Server is running on port ${config.PORT}`);
 });
 
-setupShutdown(server, config.SHUTDOWN_TIMEOUT_MS);
+setupShutdown(server, config.SHUTDOWN_TIMEOUT_MS, analytics);
