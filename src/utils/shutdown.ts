@@ -1,8 +1,14 @@
 import type { Server } from 'http';
 
+import type { AnalyticsHandle } from 'reqcast';
+
 import { logger } from './logger';
 
-export function setupShutdown(server: Server, timeoutMs: number): void {
+export function setupShutdown(
+  server: Server,
+  timeoutMs: number,
+  analytics: AnalyticsHandle | null = null,
+): void {
   let shuttingDown = false;
 
   const shutdown = async (signal: string) => {
@@ -22,6 +28,13 @@ export function setupShutdown(server: Server, timeoutMs: number): void {
     logger.info('Closing HTTP server — stopping new connections');
     await new Promise<void>((resolve) => server.close(() => resolve()));
     logger.info('HTTP server closed');
+
+    // In-flight requests are drained, so their analytics records have been
+    // dispatched — flush/close the sinks (e.g. drain file stream, close AMQP).
+    if (analytics) {
+      await analytics.close();
+      logger.info('Analytics sinks closed');
+    }
 
     clearTimeout(forceExit);
     logger.info('Shutdown complete');
