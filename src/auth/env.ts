@@ -121,7 +121,7 @@ function readRequirements(read: EnvReader, prefix: string): AuthRequirement[] {
  * `MODE`, `ISSUER`, `AUDIENCE`, `JWKS_URI`, `SECRET`, `STATIC_TOKEN`,
  * `PATH_PREFIX`, `WHITELIST_CLAIM`, `BLACKLIST_CLAIM`, `WHITELIST`/`BLACKLIST`
  * (comma-separated inline path patterns, usable in `static` mode), and
- * `REQUIREMENTS` (a JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]`).
+ * `REQUIREMENTS` (a JSON array, e.g. `[{"type":"scope","value":"svc:read"}]`).
  *
  * Mode-specific required fields are validated by `createAuthMiddleware` (fail fast).
  */
