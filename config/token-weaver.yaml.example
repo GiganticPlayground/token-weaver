@@ -52,6 +52,14 @@ strategies:
         sub: $.response.body.userId
         scope:
           - general
+    # Claims a frontend must NOT read. Encrypted into a single opaque `enc` claim; only holders
+    # of the shared secret (backend services) can decrypt it. Generate: openssl rand -base64 32
+    encrypted_claims:
+      secret: ${TW_ENC_SECRET}
+      claim: enc
+      claims:
+        internalUserId: $.response.body.internalId
+        entitlements: $.response.body.entitlements
     log:
       request_body: false
       response_body: false
