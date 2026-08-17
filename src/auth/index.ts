@@ -14,9 +14,20 @@ export {
   type CompiledAuth,
 } from './auth.core';
 export { createAuthMiddleware } from './auth.middleware';
+export {
+  decryptClaims,
+  encryptClaims,
+  parseEncryptionKey,
+  readEncryptedClaims,
+  DEFAULT_ENCRYPTED_CLAIM,
+  ENCRYPTED_CLAIMS_ALG,
+  ENCRYPTED_CLAIMS_ENC,
+  type EncryptionKey,
+} from './encrypted-claims';
 export { createAuthMiddlewareFromEnv, type FromEnvOptions } from './env';
 export { AuthError, ForbiddenError } from './types';
 export type {
+  AuthEncryptedClaims,
   AuthMiddlewareOptions,
   AuthMode,
   AuthPaths,

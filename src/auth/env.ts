@@ -1,7 +1,12 @@
 import type { RequestHandler } from 'express';
 
 import { createAuthMiddleware } from './auth.middleware';
-import type { AuthMiddlewareOptions, AuthPaths, AuthRequirement } from './types';
+import type {
+  AuthEncryptedClaims,
+  AuthMiddlewareOptions,
+  AuthPaths,
+  AuthRequirement,
+} from './types';
 
 type EnvReader = (name: string) => string | undefined;
 
@@ -52,6 +57,38 @@ function readPaths(read: EnvReader): AuthPaths | undefined {
   if (whitelist !== undefined) paths.whitelist = whitelist;
   if (blacklist !== undefined) paths.blacklist = blacklist;
   return paths;
+}
+
+/**
+ * Read encrypted-claim decryption config. `ENC_SECRET` accepts a comma-separated list so a
+ * rotation can be rolled out through env alone; `ENC_REQUIRED=false` makes the blob optional.
+ */
+function readEncryptedClaims(read: EnvReader, prefix: string): AuthEncryptedClaims | undefined {
+  const raw = read('ENC_SECRET');
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const secrets = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (secrets.length === 0) {
+    throw new Error(
+      `createAuthMiddlewareFromEnv: ${prefix}ENC_SECRET must contain at least one secret`,
+    );
+  }
+
+  const encryptedClaims: AuthEncryptedClaims = {
+    secret: secrets.length === 1 ? secrets[0]! : secrets,
+  };
+
+  const claim = read('ENC_CLAIM');
+  if (claim !== undefined) encryptedClaims.claim = claim;
+  const required = read('ENC_REQUIRED');
+  if (required !== undefined) encryptedClaims.required = required !== 'false';
+
+  return encryptedClaims;
 }
 
 function validateRequirement(entry: unknown, ctx: string): AuthRequirement {
@@ -120,8 +157,10 @@ function readRequirements(read: EnvReader, prefix: string): AuthRequirement[] {
  * Reads (with the configurable `prefix`, default `AUTH_`):
  * `MODE`, `ISSUER`, `AUDIENCE`, `JWKS_URI`, `SECRET`, `STATIC_TOKEN`,
  * `PATH_PREFIX`, `WHITELIST_CLAIM`, `BLACKLIST_CLAIM`, `WHITELIST`/`BLACKLIST`
- * (comma-separated inline path patterns, usable in `static` mode), and
- * `REQUIREMENTS` (a JSON array, e.g. `[{"type":"scope","value":"svc:read"}]`).
+ * (comma-separated inline path patterns, usable in `static` mode),
+ * `REQUIREMENTS` (a JSON array, e.g. `[{"type":"scope","value":"svc:read"}]`), and
+ * `ENC_SECRET` (comma-separated for rotation) / `ENC_CLAIM` / `ENC_REQUIRED` for decrypting an
+ * encrypted claim blob.
  *
  * Mode-specific required fields are validated by `createAuthMiddleware` (fail fast).
  */
@@ -158,6 +197,9 @@ export function createAuthMiddlewareFromEnv(opts: FromEnvOptions = {}): RequestH
 
   const paths = readPaths(read);
   if (paths !== undefined) options.paths = paths;
+
+  const encryptedClaims = readEncryptedClaims(read, prefix);
+  if (encryptedClaims !== undefined) options.encryptedClaims = encryptedClaims;
 
   const requirements = readRequirements(read, prefix);
   if (requirements.length > 0) options.requirements = requirements;

@@ -88,6 +88,7 @@ Core config concepts:
 - `upstream`: delegated-strategy target, auth, timeout, and request mapping
 - `response_mapping`: delegated-strategy success condition, error mappings, and claim extraction
 - `log`: delegated-strategy optional HTTP logging flags (`request_body`, `response_body`, `request_headers`)
+- `encrypted_claims`: optional block of claims encrypted into one opaque JWT claim (see below)
 - `jwt`: issuer and TTL for tokens issued by that strategy
 
 ### Mapping Expressions
@@ -191,6 +192,59 @@ log:
 ```
 
 All flags default to `false`. Enable selectively for debugging — request headers may contain auth credentials.
+
+### Encrypted Claims (confidential from the frontend)
+
+A JWT is signed, not encrypted — anything in its payload is readable by whoever holds the token,
+including a browser. To carry claims the frontend must **not** read (internal ids, price tiers,
+entitlements), add an `encrypted_claims` block to any strategy. Its claims are mapped exactly like
+public `claims`, then encrypted into a **compact JWE** stored as one opaque claim of the normal
+signed JWT. Backends holding the shared secret decrypt it; everyone else sees ciphertext.
+
+```yaml
+- name: player
+  type: delegated
+  # ... upstream / response_mapping as usual ...
+  response_mapping:
+    claims:                             # readable by anyone holding the token
+      sub: $.response.body.userId
+      scope: [general]
+  encrypted_claims:
+    secret: ${TW_ENC_SECRET}            # 32-byte key: openssl rand -base64 32
+    claim: enc                          # claim carrying the blob (default `enc`)
+    kid: enc-key-1                      # optional; written to the JWE header
+    claims:                             # readable ONLY with the shared secret
+      internalUserId: $.response.body.internalId
+      entitlements: $.response.body.entitlements
+```
+
+The issued token looks like a normal JWT with one extra opaque claim:
+
+```json
+{ "sub": "player-123", "scope": ["general"], "enc": "eyJhbGciOiJkaXIi...", "iss": "...", "exp": 1 }
+```
+
+Fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `secret` | yes | Shared key: 32 bytes, base64 or hex. Passphrases are rejected, not stretched. Use `${ENV_VAR}`. |
+| `claims` | yes | Claims to encrypt. Same `$` path mapping as public claims. |
+| `claim` | no | Claim name carrying the blob. Default `enc`. Cannot be `iss`/`iat`/`exp`/`sub`, or collide with a mapped public claim (both rejected at startup). |
+| `kid` | no | Key id written to the JWE protected header, so a consumer can tell which key to use. |
+
+The blob is `alg: dir` + `enc: A256GCM` (direct AES-256-GCM under the shared key) in standard
+RFC 7516 compact form, so a consumer in any language can decrypt it. From Node, use the
+verification middleware's `encryptedClaims` option (below) or the exported `decryptClaims`.
+
+Security notes:
+- This adds **confidentiality from the token holder**, not integrity — the outer JWT signature
+  already covers the blob, and GCM makes tampering fail decryption.
+- Anyone with the secret can decrypt, so use **one secret per audience** rather than one
+  deployment-wide key. Each strategy configures its own.
+- `sub` must stay a public claim (signing requires it), and each blob adds roughly 100 bytes plus
+  its ciphertext to the token — keep the block small enough for a header.
+- The secret is validated at startup: a wrong-length key fails fast, not on first request.
 
 ## Environment Variables
 
@@ -345,6 +399,48 @@ claims:
     - /nexus/*
 ```
 
+### Decrypting encrypted claims
+
+When the issuing strategy uses `encrypted_claims` (above), give the middleware the matching
+secret. After verification the blob claim on `req.jwtPayload` holds the **decrypted object**
+instead of the ciphertext string:
+
+```ts
+createAuthMiddleware({
+  mode: 'jwt-jwks',
+  issuer: 'https://token-weaver.example.com',
+  jwksUri: 'https://token-weaver.example.com/.well-known/jwks.json',
+  encryptedClaims: {
+    secret: process.env.TW_ENC_SECRET,  // 32-byte key, base64 or hex
+    claim: 'enc',                       // default 'enc'
+    required: true,                     // default true
+  },
+  onVerified: (payload, req) => {
+    req.auth = { userId: payload.sub, ...readEncryptedClaims(payload) };
+  },
+});
+```
+
+Behavior:
+- A missing blob is a `401` when `required` (the default); set `required: false` to accept tokens
+  that carry no blob. A blob that **is** present but fails to decrypt is always a `401`.
+- Decryption runs **after** signature verification and **before** authorization. Note that
+  `requirements`/`paths` read **top-level** claims, so a scope or path list hidden inside the blob
+  does not satisfy them — keep access-control claims public and secrets in the blob.
+- `secret` accepts an **array** to support rotation: keys are tried in order, so a consumer can
+  accept the previous key while issuers roll onto the new one.
+- Malformed secrets throw at construction time (fail fast), like the other options.
+- Ignored in `static` mode, which has no claims.
+
+For flows outside the middleware, the same helpers are exported directly:
+
+```ts
+import { decryptClaims, encryptClaims, parseEncryptionKey } from 'token-weaver/auth';
+
+const key = parseEncryptionKey(process.env.TW_ENC_SECRET);   // validates the 32-byte length
+const claims = await decryptClaims(payload.enc, [key]);
+```
+
 ### Configuring from environment variables
 
 `createAuthMiddlewareFromEnv()` builds the same middleware from environment variables instead of
@@ -385,6 +481,9 @@ app.use('/admin', createAuthMiddlewareFromEnv({
 | `AUTH_WHITELIST_CLAIM` | `paths.whitelistClaim` | optional; enables `paths` |
 | `AUTH_BLACKLIST_CLAIM` | `paths.blacklistClaim` | optional; enables `paths` |
 | `AUTH_REQUIREMENTS` | `requirements` | JSON array, e.g. `[{"type":"scope","value":"nexus:read"}]` |
+| `AUTH_ENC_SECRET` | `encryptedClaims.secret` | optional; enables blob decryption. Comma-separated for rotation |
+| `AUTH_ENC_CLAIM` | `encryptedClaims.claim` | optional; default `enc` |
+| `AUTH_ENC_REQUIRED` | `encryptedClaims.required` | optional; `false` makes the blob optional |
 
 Empty strings are treated as unset. Worked examples:
 
@@ -433,6 +532,7 @@ AUTH_STATIC_TOKEN=${SERVICE_TOKEN}
 - [src/services/jwt.service.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/services/jwt.service.ts): JWT signing and JWKS generation
 - [src/config/token-weaver.config.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/config/token-weaver.config.ts): strategy config loading and validation
 - [src/utils/path-expression.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/utils/path-expression.ts): path resolution and simple condition evaluation for mappings
+- [src/auth/encrypted-claims.ts](/Users/daniellmorris/work/gigaplay/os/token-weaver/src/auth/encrypted-claims.ts): encrypted claim blobs — both the issuing and verification halves
 
 ## Notes
 

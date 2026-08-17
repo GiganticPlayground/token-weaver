@@ -15,6 +15,9 @@ import type { AuthMiddlewareOptions, MultiStrategyAuthOptions } from './types';
  * Accepts either a **single** strategy ({@link AuthMiddlewareOptions}) or **multiple**
  * strategies ({@link MultiStrategyAuthOptions}) tried in order until one accepts the request.
  *
+ * With `encryptedClaims` configured, the encrypted claim on `req.jwtPayload` holds the decrypted
+ * object rather than the ciphertext string (see `readEncryptedClaims`).
+ *
  * Failures are passed to `next()` as framework-neutral errors: a 401 {@link AuthError} for
  * authentication (missing/invalid token), or a 403 {@link ForbiddenError} for authorization
  * (`requirements`/`paths` not met). With multiple strategies, the surfaced failure prefers a

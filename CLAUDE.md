@@ -22,7 +22,7 @@ npm run generate     # regenerate src/types/schema.d.ts AND stub controllers fro
 
 Run a single test by name: `node --import=tsx --test --test-name-pattern "<pattern>" tests/e2e/auth.e2e.test.ts`
 
-The only test suite is `tests/e2e/auth.e2e.test.ts`. It is a true end-to-end test: it spawns the service as a child process, stands up a fake upstream HTTP server, generates ephemeral keys, and asserts on issued JWTs. There are no unit tests — behavior is verified through the running service.
+`tests/e2e/auth.e2e.test.ts` covers the service itself: it spawns it as a child process, stands up a fake upstream HTTP server, generates ephemeral keys, and asserts on issued JWTs. Server behavior is verified only this way — there are no unit tests for the server. The published `src/auth/` library, being server-independent, is tested in-process under `tests/auth/`.
 
 ## Required setup before the service runs
 
@@ -54,6 +54,10 @@ Strategy execution lives entirely in `src/services/token-weaver.service.ts`:
 
 Both strategies optionally enforce `inbound_auth` (`api_key`/`bearer`/`none`) before running.
 
+Either strategy may also declare `encrypted_claims`: a second claims block mapped the same way but
+encrypted into one opaque claim (default `enc`) instead of published in cleartext — for values a
+frontend holding the token must not read. See "Encrypted claims" below.
+
 ### Mapping expressions
 
 `src/utils/path-expression.ts` implements the `$.request.body.x` / `$.response.body.y` path resolver and the simple `==` condition evaluator used by `success_condition` and `error_mappings`. The `mapValue` helper in the service recursively resolves any string starting with `$` inside `claims`/`body_mapping` objects against the request (and, for delegated, upstream-response) context. This is the mechanism that turns request/response fields into JWT claims — changes here affect every strategy.
@@ -61,6 +65,23 @@ Both strategies optionally enforce `inbound_auth` (`api_key`/`bearer`/`none`) be
 ### JWT signing
 
 `src/services/jwt.service.ts` signs payloads with either RS256 (RSA key, public half published at `/.well-known/jwks.json`) or HS256 (shared secret, **not** in JWKS — `getJwks` returns empty keys when no RSA key is loaded). The RSA key is loaded lazily only when at least one strategy declares `algorithm: RS256`. Every issued token must resolve a non-empty `sub` claim or signing throws a 500.
+
+### Encrypted claims
+
+`src/auth/encrypted-claims.ts` holds **both halves** of the encrypted-claim feature — `encryptClaims`
+(used by the issuing service) and `decryptClaims` (used by verification) — because they must agree
+exactly on the JWE header and key encoding. It lives under `src/auth/` and respects that
+directory's import boundary (only `jose` + node builtins), so the server imports *from* it and not
+the reverse.
+
+The blob is a compact JWE, `alg: dir` + `enc: A256GCM`, under a 32-byte shared key supplied as
+base64 or hex; short passphrases are rejected rather than stretched. On the issuing side
+`TokenWeaverService` parses each strategy's key once in its constructor and `addEncryptedClaims`
+maps + encrypts the block just before signing, so `jwt.service.ts` needs no knowledge of it. On the
+verification side `buildDecryptor` in `auth.core.ts` runs after signature verification and **before**
+authorization, replacing the ciphertext string in the returned payload with the decrypted object;
+`requirements`/`paths` still read top-level claims only. Config validation rejects a blob claim that
+is reserved (`iss`/`iat`/`exp`/`sub`) or collides with a mapped public claim.
 
 ### Published library: auth-verification middleware (`src/auth/`)
 

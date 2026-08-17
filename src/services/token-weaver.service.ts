@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 
 import { JwtService } from './jwt.service';
+import { encryptClaims, parseEncryptionKey } from '../auth/encrypted-claims';
 import { config } from '../config/index';
 import type {
   DelegatedStrategyConfig,
@@ -176,10 +177,27 @@ async function parseUpstreamBody(response: globalThis.Response): Promise<unknown
 export class TokenWeaverService {
   private readonly jwtService: JwtService;
   private readonly strategiesByName: ReadonlyMap<string, StrategyConfig>;
+  private readonly encryptionKeysByStrategy: ReadonlyMap<string, Uint8Array>;
 
   constructor(private readonly gatewayConfig: TokenWeaverConfig) {
     this.strategiesByName = new Map(
       gatewayConfig.strategies.map((strategy) => [strategy.name, strategy] as const),
+    );
+
+    // Parse encryption secrets once at startup rather than per request.
+    this.encryptionKeysByStrategy = new Map(
+      gatewayConfig.strategies.flatMap((strategy) => {
+        const encryptedClaims = strategy.encrypted_claims;
+        if (!encryptedClaims) {
+          return [];
+        }
+
+        const key = parseEncryptionKey(
+          encryptedClaims.secret,
+          `strategy ${strategy.name}: encrypted_claims.secret`,
+        );
+        return [[strategy.name, key] as const];
+      }),
     );
 
     // Only load the RSA private key when at least one strategy uses RS256 signing.
@@ -218,20 +236,63 @@ export class TokenWeaverService {
     return strategy;
   }
 
-  private issueToken(
+  /**
+   * Map the strategy's `encrypted_claims` against the same context the public claims were mapped
+   * from, encrypt them into one opaque claim, and add it to the payload. A no-op when the
+   * strategy declares no encrypted claims.
+   */
+  private async addEncryptedClaims(
     strategy: StrategyConfig,
     claims: Record<string, unknown>,
-  ): AuthSuccessPayload {
+    context: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const encryptedClaims = strategy.encrypted_claims;
+    if (!encryptedClaims) {
+      return claims;
+    }
+
+    const key = this.encryptionKeysByStrategy.get(strategy.name);
+    if (!key) {
+      throw new HttpError(500, `Strategy ${strategy.name} has no encrypted claims key loaded`);
+    }
+
+    const mapped = ensureMappedClaims(mapValue(encryptedClaims.claims, context), strategy.name);
+
+    let blob: string;
+    try {
+      blob = await encryptClaims(mapped, {
+        key,
+        ...(encryptedClaims.kid ? { kid: encryptedClaims.kid } : {}),
+      });
+    } catch (error) {
+      // Never surface the error detail — it is derived from the claim values being protected.
+      logger.error('Failed to encrypt claims', {
+        strategy: strategy.name,
+        error: error instanceof Error ? error.message : 'unknown error',
+      });
+      throw new HttpError(500, 'Failed to encrypt claims');
+    }
+
+    return { ...claims, [encryptedClaims.claim]: blob };
+  }
+
+  private async issueToken(
+    strategy: StrategyConfig,
+    claims: Record<string, unknown>,
+    context: Record<string, unknown>,
+  ): Promise<AuthSuccessPayload> {
+    const payload = await this.addEncryptedClaims(strategy, claims, context);
+
     return {
-      token: this.jwtService.sign(claims, strategy.jwt),
+      token: this.jwtService.sign(payload, strategy.jwt),
       expires_in: strategy.jwt.ttl,
     };
   }
 
-  private handleDirectStrategy(
+  private async handleDirectStrategy(
     strategy: Extract<StrategyConfig, { type: 'direct' }>,
     req: Request,
-  ): AuthSuccessPayload {
+  ): Promise<AuthSuccessPayload> {
     const requestContext = buildRequestContext(req) as Record<string, unknown>;
     const credential = resolvePath(
       strategy.credential_path ?? '$.request.body.secret',
@@ -250,7 +311,7 @@ export class TokenWeaverService {
 
     const mappedClaims = ensureMappedClaims(mapValue(matchedCredential.claims, requestContext), strategy.name);
 
-    return this.issueToken(strategy, mappedClaims);
+    return this.issueToken(strategy, mappedClaims, requestContext);
   }
 
   private async handleDelegatedStrategy(
@@ -352,6 +413,6 @@ export class TokenWeaverService {
       strategy.name,
     );
 
-    return this.issueToken(strategy, mappedClaims);
+    return this.issueToken(strategy, mappedClaims, evaluationContext);
   }
 }
