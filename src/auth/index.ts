@@ -12,6 +12,8 @@ export {
   extractBearerToken,
   type AuthenticateInput,
   type CompiledAuth,
+  validatePathPatterns,
+  type PathPatternIssue,
 } from './auth.core';
 export { createAuthMiddleware } from './auth.middleware';
 export {

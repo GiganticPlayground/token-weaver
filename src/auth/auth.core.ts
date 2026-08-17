@@ -111,8 +111,126 @@ function checkRequirement(payload: JWTPayload, requirement: AuthRequirement): bo
   }
 }
 
+/**
+ * HTTP methods a pattern may pin. Lower-case; matching is case-insensitive.
+ */
+const HTTP_METHODS = new Set([
+  'get',
+  'post',
+  'put',
+  'patch',
+  'delete',
+  'head',
+  'options',
+  'trace',
+]);
+
+/**
+ * Split a pattern (or a request path) into its optional method prefix and path.
+ *
+ * A pattern may pin an HTTP method with a space-separated prefix (`get orders/*`). Anything
+ * before the first space is treated as a method prefix ONLY when it is a known HTTP method, so
+ * a path that happens to contain a space is left alone rather than silently reinterpreted.
+ */
+function splitMethodPrefix(pattern: string): { method?: string; path: string } {
+  const trimmed = pattern.trim();
+  const firstSpace = trimmed.indexOf(' ');
+  if (firstSpace === -1) {
+    return { path: trimmed };
+  }
+
+  const candidate = trimmed.slice(0, firstSpace).toLowerCase();
+  if (!HTTP_METHODS.has(candidate)) {
+    return { path: trimmed };
+  }
+
+  return { method: candidate, path: trimmed.slice(firstSpace + 1).trim() };
+}
+
+/**
+ * Canonicalize a pattern or request path so both sides of a comparison agree.
+ *
+ * A leading `/` is optional and carries no meaning here — `orders/*`, `/orders/*`,
+ * `get orders/*` and `get /orders/*` all normalize to the same thing, so an operator writing
+ * the slash (or not) never silently produces a rule that cannot match.
+ */
 function normalizePath(path: string): string {
-  return path.replace(/^\//, '');
+  const { method, path: rest } = splitMethodPrefix(path);
+  const bare = rest.replace(/^\//, '');
+  return method === undefined ? bare : `${method} ${bare}`;
+}
+
+/**
+ * A problem found in a route pattern by {@link validatePathPatterns}.
+ */
+export interface PathPatternIssue {
+  /** The offending pattern, as written. */
+  pattern: string;
+  /** Human-readable description of what is wrong. */
+  message: string;
+}
+
+/**
+ * Check route patterns for mistakes that would leave a rule unable to match anything.
+ *
+ * A pattern that cannot match is dangerous in a blacklist: the rule reads as configured while
+ * the path stays reachable. Consumers should treat a non-empty result as a configuration error
+ * and fail startup rather than boot with a rule that silently does nothing.
+ *
+ * What is reported:
+ * - an empty pattern (matches everything or nothing depending on the list, never intended)
+ * - a `METHOD path` prefix whose method is not a known HTTP method (e.g. a typo like `pos`),
+ *   detected as a first token that is followed by a space but is not a method and does not look
+ *   like a path segment
+ *
+ * A leading `/` is NOT an issue - it is normalized away by the matcher.
+ */
+export function validatePathPatterns(patterns: string[]): PathPatternIssue[] {
+  const issues: PathPatternIssue[] = [];
+
+  for (const pattern of patterns) {
+    const trimmed = (pattern ?? '').trim();
+    if (!trimmed) {
+      issues.push({ pattern, message: 'pattern is empty' });
+      continue;
+    }
+
+    // A bare method name is a pattern that only matches a path literally called 'get'. Far more
+    // likely the author meant to pin a method and dropped the path.
+    if (HTTP_METHODS.has(trimmed.toLowerCase())) {
+      issues.push({
+        pattern,
+        message:
+          `'${trimmed}' is an HTTP method with no path - ` +
+          `write '${trimmed.toLowerCase()} <path>' (or '*' to match every path)`,
+      });
+      continue;
+    }
+
+    // A space means the author intended a method prefix: operations do not contain spaces. If
+    // the first token is not a known method, the rule can never match anything.
+    const firstSpace = trimmed.indexOf(' ');
+    if (firstSpace !== -1) {
+      const candidate = trimmed.slice(0, firstSpace).toLowerCase();
+      if (!HTTP_METHODS.has(candidate)) {
+        issues.push({
+          pattern,
+          message:
+            `'${trimmed.slice(0, firstSpace)}' is not a valid HTTP method prefix ` +
+            `(expected one of: ${[...HTTP_METHODS].join(', ')})`,
+        });
+        continue;
+      }
+      if (!trimmed.slice(firstSpace + 1).trim()) {
+        issues.push({
+          pattern,
+          message: `method prefix '${candidate}' is not followed by a path`,
+        });
+      }
+    }
+  }
+
+  return issues;
 }
 
 /** Compile glob-ish path patterns (`*` → `.*`) into a single anchored, case-insensitive regex. */
