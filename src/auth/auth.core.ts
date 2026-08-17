@@ -4,6 +4,7 @@ import { TextEncoder } from 'util';
 
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyOptions } from 'jose';
 
+import { DEFAULT_ENCRYPTED_CLAIM, decryptClaims, parseEncryptionKey } from './encrypted-claims';
 import {
   AuthError,
   ForbiddenError,
@@ -43,6 +44,9 @@ type InputVerifier = (input: AuthenticateInput) => Promise<JWTPayload>;
 
 /** A resolved authorizer: throws ForbiddenError if the payload/input is not permitted. */
 type Authorizer = (payload: JWTPayload, input: AuthenticateInput) => void;
+
+/** A resolved claim-blob decryptor: returns the payload with the blob claim decrypted. */
+type ClaimsDecryptor = (payload: JWTPayload) => Promise<JWTPayload>;
 
 function configError(field: string, mode: AuthMiddlewareOptions['mode']): Error {
   return new Error(`compileAuth: '${field}' is required when mode is '${mode}'`);
@@ -205,6 +209,53 @@ function buildAuthorizer(options: AuthStrategyOptions): Authorizer | undefined {
   };
 }
 
+// --- Optional encrypted-claim decryption ------------------------------------------
+
+/**
+ * Build the optional claim-blob decryptor from `encryptedClaims`. Returns `undefined` when none
+ * is configured, or in `static` mode (no claims to decrypt). Keys are parsed once here so a
+ * malformed secret fails at compile time rather than on the first request.
+ */
+function buildDecryptor(options: AuthStrategyOptions): ClaimsDecryptor | undefined {
+  const encryptedClaims = options.encryptedClaims;
+  if (!encryptedClaims || options.mode === 'static') {
+    return undefined;
+  }
+
+  const secrets = Array.isArray(encryptedClaims.secret)
+    ? encryptedClaims.secret
+    : [encryptedClaims.secret];
+  if (secrets.length === 0) {
+    throw new Error("compileAuth: 'encryptedClaims.secret' must not be empty");
+  }
+
+  const keys = secrets.map((secret, index) =>
+    parseEncryptionKey(secret, `encryptedClaims.secret[${index}]`),
+  );
+  const claim = encryptedClaims.claim ?? DEFAULT_ENCRYPTED_CLAIM;
+  const required = encryptedClaims.required ?? true;
+
+  return async (payload) => {
+    const blob = payload[claim];
+    if (blob === undefined) {
+      if (required) {
+        throw new AuthError(`Token is missing the encrypted claim: ${claim}`);
+      }
+      return payload;
+    }
+
+    if (typeof blob !== 'string') {
+      throw new AuthError(`Encrypted claim ${claim} must be a string`);
+    }
+
+    try {
+      return { ...payload, [claim]: await decryptClaims(blob, keys) };
+    } catch (error) {
+      throw new AuthError('Failed to decrypt encrypted claims', { cause: error });
+    }
+  };
+}
+
 /**
  * Validate options and build the verifier once. Throws a plain Error on an inconsistent
  * option combination (programmer error, fail fast).
@@ -270,14 +321,19 @@ function resolveVerifier(options: AuthStrategyOptions): InputVerifier {
   }
 }
 
-/** A verify + optional authorize pair compiled once from a single strategy. */
+/** A verify + optional decrypt + optional authorize chain compiled once from a single strategy. */
 interface CompiledStrategy {
   verify: InputVerifier;
+  decrypt: ClaimsDecryptor | undefined;
   authorize: Authorizer | undefined;
 }
 
 function compileStrategy(options: AuthStrategyOptions): CompiledStrategy {
-  return { verify: resolveVerifier(options), authorize: buildAuthorizer(options) };
+  return {
+    verify: resolveVerifier(options),
+    decrypt: buildDecryptor(options),
+    authorize: buildAuthorizer(options),
+  };
 }
 
 /** HTTP status carried by AuthError/ForbiddenError; defaults to 401 for anything unexpected. */
@@ -288,9 +344,9 @@ function statusOf(error: unknown): number {
 }
 
 /**
- * Try each strategy in order. The first whose verification AND authorization both pass wins
- * and its payload is returned. If none pass, the most informative failure is thrown — a 403
- * (authenticated but not authorized) is preferred over a 401.
+ * Try each strategy in order. The first whose verification, claim decryption AND authorization
+ * all pass wins and its payload is returned. If none pass, the most informative failure is
+ * thrown — a 403 (authenticated but not authorized) is preferred over a 401.
  */
 async function authenticateAny(
   strategies: CompiledStrategy[],
@@ -298,10 +354,14 @@ async function authenticateAny(
 ): Promise<JWTPayload> {
   let bestFailure: { status: number; error: Error } | null = null;
 
-  for (const { verify, authorize } of strategies) {
+  for (const { verify, decrypt, authorize } of strategies) {
     let payload: JWTPayload;
     try {
       payload = await verify(input);
+      if (decrypt) {
+        // Before authorization, so allow/deny patterns and scopes can live in the blob.
+        payload = await decrypt(payload);
+      }
       if (authorize) {
         authorize(payload, input);
       }
@@ -328,7 +388,8 @@ async function authenticateAny(
  * so recompiling per request refetches keys.
  *
  * Accepts a **single** strategy ({@link AuthMiddlewareOptions}) or **multiple** strategies
- * ({@link MultiStrategyAuthOptions}) tried in order until one accepts. Failures throw
+ * ({@link MultiStrategyAuthOptions}) tried in order until one accepts. With `encryptedClaims`
+ * configured, the blob claim in the returned payload holds the decrypted object. Failures throw
  * framework-neutral errors: a 401 {@link AuthError} for authentication (missing/invalid
  * token), or a 403 {@link ForbiddenError} for authorization (`requirements`/`paths` not met).
  * With multiple strategies, the surfaced failure prefers a 403 over a 401.

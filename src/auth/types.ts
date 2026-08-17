@@ -46,6 +46,32 @@ export interface AuthPaths {
 }
 
 /**
+ * Optional decryption of an encrypted claim blob carried inside the verified JWT.
+ *
+ * Token Weaver can encrypt a group of claims into a single opaque claim (a compact JWE) so a
+ * frontend holding the token cannot read them. Configure this with the matching shared secret
+ * and, after verification, that claim holds the decrypted object instead of the ciphertext
+ * string — read it from `req.jwtPayload[claim]` (or via `readEncryptedClaims`).
+ *
+ * Ignored in `static` mode, which has no claims.
+ */
+export interface AuthEncryptedClaims {
+  /**
+   * Shared secret: a 32-byte key as base64 or hex. Pass several to accept more than one during
+   * a rotation — they are tried in order.
+   */
+  secret: string | string[];
+  /** Claim carrying the blob. Default `enc`. */
+  claim?: string;
+  /**
+   * Whether the blob must be present. Default `true`: a token without it is rejected with 401.
+   * Set `false` when only some tokens for this issuer carry encrypted claims. A blob that IS
+   * present but fails to decrypt is always a 401, regardless of this setting.
+   */
+  required?: boolean;
+}
+
+/**
  * Options for {@link createAuthMiddleware}. Validated at construction time;
  * an inconsistent combination throws synchronously (fail fast).
  */
@@ -73,6 +99,12 @@ export interface AuthMiddlewareOptions {
    * rejected with 403.
    */
   paths?: AuthPaths;
+  /**
+   * Optional decryption of an encrypted claim blob. When set, the configured claim is decrypted
+   * after verification and before authorization, replacing the ciphertext string in the payload
+   * with the decrypted object. Ignored in `static` mode.
+   */
+  encryptedClaims?: AuthEncryptedClaims;
   /**
    * Optional hook invoked after a successful verification and authorization. Lets a consumer
    * map claims onto its own request shape without the library hard-coding them. For `static`

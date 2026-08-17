@@ -7,6 +7,12 @@ import { after, before, describe, it } from 'node:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import { compileAuth, decryptClaims, parseEncryptionKey } from '../../src/auth/index';
+
+/** 32-byte shared key for the encrypted-claim strategies, as base64 (see parseEncryptionKey). */
+const encryptionSecret = Buffer.from('token-weaver-e2e-encryption-key!').toString('base64');
+const encryptionKey = parseEncryptionKey(encryptionSecret);
+
 type TestContext = {
   serviceProcess: ChildProcessWithoutNullStreams;
   servicePort: number;
@@ -348,6 +354,67 @@ function createTestConfig(upstreamPort: number): string {
           },
         },
         {
+          name: 'encrypted-direct',
+          type: 'direct',
+          credentials: [
+            {
+              secret: '${STATIC_CLIENT_SECRET}',
+              claims: {
+                sub: '$.request.body.deviceId',
+                scope: ['general'],
+              },
+            },
+          ],
+          encrypted_claims: {
+            secret: '${TW_ENC_SECRET}',
+            kid: 'enc-key-1',
+            claims: {
+              internalId: 'internal-device-9',
+              tier: '$.request.body.tier',
+              entitlements: ['premium', 'beta'],
+            },
+          },
+          jwt: {
+            issuer: 'token-weaver',
+            ttl: 3600,
+          },
+        },
+        {
+          name: 'encrypted-delegated',
+          type: 'delegated',
+          upstream: {
+            url: `http://127.0.0.1:${upstreamPort}/verify`,
+            method: 'POST',
+            timeout_ms: 1_000,
+            auth: {
+              type: 'bearer',
+              token: '${UPSTREAM_API_TOKEN}',
+            },
+            body_mapping: {
+              username: '$.request.body.username',
+              password: '$.request.body.password',
+            },
+          },
+          response_mapping: {
+            success_condition: "$.status == 'ok'",
+            claims: {
+              sub: '$.response.body.userId',
+            },
+          },
+          encrypted_claims: {
+            secret: '${TW_ENC_SECRET}',
+            claim: 'private',
+            claims: {
+              upstreamUserId: '$.response.body.userId',
+              upstreamStatus: '$.response.body.status',
+            },
+          },
+          jwt: {
+            issuer: 'token-weaver',
+            ttl: 3600,
+          },
+        },
+        {
           name: 'hmac-client',
           type: 'direct',
           credentials: [
@@ -409,6 +476,7 @@ void describe('Token Weaver e2e', () => {
         UPSTREAM_API_TOKEN: 'upstream-service-token',
         HMAC_CLIENT_SECRET: 'hmac-client-secret',
         TW_HMAC_SECRET: 'test-hmac-shared-secret',
+        TW_ENC_SECRET: encryptionSecret,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -678,6 +746,166 @@ void describe('Token Weaver e2e', () => {
     assert.equal(response.status, 401);
     const body = (await response.json()) as { message: string };
     assert.equal(body.message, 'Authentication failed');
+  });
+
+  void it('encrypts the encrypted_claims block into an opaque JWT claim', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/encrypted-direct`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: 'static-secret',
+          deviceId: 'client-device-002',
+          tier: 'gold',
+        }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { token: string };
+    const [, encodedPayload] = body.token.split('.');
+    const payload = decodeJwtPart(encodedPayload!);
+
+    // Public claims stay readable.
+    assert.equal(payload.sub, 'client-device-002');
+    assert.deepEqual(payload.scope, ['general']);
+
+    // The encrypted block is a single opaque compact JWE, and none of its values leak into the
+    // readable payload.
+    assert.equal(typeof payload.enc, 'string');
+    assert.equal((payload.enc as string).split('.').length, 5, 'expected a compact JWE');
+    const rawPayload = Buffer.from(encodedPayload!, 'base64url').toString('utf8');
+    assert.ok(!rawPayload.includes('internal-device-9'), 'encrypted value leaked in cleartext');
+    assert.ok(!rawPayload.includes('gold'), 'encrypted value leaked in cleartext');
+
+    const decrypted = await decryptClaims(payload.enc as string, [encryptionKey]);
+    assert.deepEqual(decrypted, {
+      internalId: 'internal-device-9',
+      tier: 'gold',
+      entitlements: ['premium', 'beta'],
+    });
+  });
+
+  void it('encrypts claims mapped from an upstream response', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/encrypted-delegated`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'player@example.com',
+          password: 'correct-password',
+        }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { token: string };
+    const payload = decodeJwtPart(body.token.split('.')[1]!);
+
+    assert.equal(payload.sub, 'player-123');
+    assert.equal(payload.enc, undefined, 'blob must use the configured claim name');
+    assert.equal(typeof payload.private, 'string');
+
+    const decrypted = await decryptClaims(payload.private as string, [encryptionKey]);
+    assert.deepEqual(decrypted, { upstreamUserId: 'player-123', upstreamStatus: 'ok' });
+  });
+
+  void it('decrypts the blob during verification with the shared secret', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/encrypted-direct`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: 'static-secret',
+          deviceId: 'client-device-003',
+          tier: 'silver',
+        }),
+      },
+    );
+    const { token } = (await response.json()) as { token: string };
+
+    const authenticate = compileAuth({
+      mode: 'jwt-jwks',
+      issuer: 'token-weaver',
+      jwksUri: `http://127.0.0.1:${testContext.servicePort}/.well-known/jwks.json`,
+      encryptedClaims: { secret: encryptionSecret },
+    });
+
+    const payload = await authenticate({ authorizationHeader: `Bearer ${token}` });
+    assert.equal(payload.sub, 'client-device-003');
+    assert.deepEqual(payload.enc, {
+      internalId: 'internal-device-9',
+      tier: 'silver',
+      entitlements: ['premium', 'beta'],
+    });
+  });
+
+  void it('rejects verification when the encryption secret does not match', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/encrypted-direct`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret: 'static-secret', deviceId: 'device-x', tier: 'bronze' }),
+      },
+    );
+    const { token } = (await response.json()) as { token: string };
+
+    const authenticate = compileAuth({
+      mode: 'jwt-jwks',
+      issuer: 'token-weaver',
+      jwksUri: `http://127.0.0.1:${testContext.servicePort}/.well-known/jwks.json`,
+      encryptedClaims: {
+        secret: Buffer.from('wrong-key-wrong-key-wrong-key-32').toString('base64'),
+      },
+    });
+
+    await assert.rejects(
+      authenticate({ authorizationHeader: `Bearer ${token}` }),
+      (error: Error & { status?: number }) => {
+        assert.equal(error.status, 401);
+        return true;
+      },
+    );
+  });
+
+  void it('rejects a token missing the required encrypted claim', async () => {
+    // static-client issues no encrypted block, so a verifier that requires one must reject it.
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/auth/static-client`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': 'inbound-key' },
+        body: JSON.stringify({ secret: 'static-secret', deviceId: 'device-y' }),
+      },
+    );
+    const { token } = (await response.json()) as { token: string };
+
+    const options = {
+      mode: 'jwt-jwks' as const,
+      issuer: 'token-weaver',
+      jwksUri: `http://127.0.0.1:${testContext.servicePort}/.well-known/jwks.json`,
+    };
+
+    await assert.rejects(
+      compileAuth({ ...options, encryptedClaims: { secret: encryptionSecret } })({
+        authorizationHeader: `Bearer ${token}`,
+      }),
+      (error: Error & { status?: number }) => {
+        assert.equal(error.status, 401);
+        return true;
+      },
+    );
+
+    // ...but passes when the blob is declared optional.
+    const payload = await compileAuth({
+      ...options,
+      encryptedClaims: { secret: encryptionSecret, required: false },
+    })({ authorizationHeader: `Bearer ${token}` });
+    assert.equal(payload.sub, 'device-y');
   });
 
   void it('catch-all error mapping does not affect successful upstream auth', async () => {

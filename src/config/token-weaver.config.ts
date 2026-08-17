@@ -5,6 +5,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 
 import { config as env } from './index';
+import { DEFAULT_ENCRYPTED_CLAIM, parseEncryptionKey } from '../auth/encrypted-claims';
 import { HttpError } from '../utils/http-error';
 
 const scalarStringSchema: z.ZodType<string> = z
@@ -64,6 +65,48 @@ const inboundAuthSchema = z
     }
   });
 
+/** Claims the signer sets itself — an encrypted blob cannot occupy one of these. */
+const RESERVED_CLAIM_NAMES = new Set(['iss', 'iat', 'exp', 'sub']);
+
+/**
+ * Optional block of claims encrypted into a single opaque JWT claim, readable only by holders of
+ * the shared secret. Mapped exactly like public `claims`, so `$` path expressions work the same.
+ */
+const encryptedClaimsSchema = z
+  .object({
+    secret: z.string().min(1),
+    claim: z.string().min(1).optional().default(DEFAULT_ENCRYPTED_CLAIM),
+    kid: z.string().min(1).optional(),
+    claims: mappingObjectSchema,
+  })
+  .superRefine((value, ctx) => {
+    try {
+      parseEncryptionKey(value.secret, 'encrypted_claims.secret');
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : 'invalid encrypted_claims.secret',
+        path: ['secret'],
+      });
+    }
+
+    if (RESERVED_CLAIM_NAMES.has(value.claim)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `encrypted_claims.claim cannot be a reserved claim: ${value.claim}`,
+        path: ['claim'],
+      });
+    }
+
+    if (Object.keys(value.claims).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'encrypted_claims.claims must not be empty',
+        path: ['claims'],
+      });
+    }
+  });
+
 const sharedJwtSchema = z
   .object({
     algorithm: z.enum(['RS256', 'HS256']).optional().default('RS256'),
@@ -94,6 +137,7 @@ const directStrategySchema = z.object({
       }),
     )
     .min(1),
+  encrypted_claims: encryptedClaimsSchema.optional(),
   jwt: sharedJwtSchema,
 });
 
@@ -143,6 +187,7 @@ const delegatedStrategySchema = z.object({
     error_mappings: z.array(errorMappingSchema).optional(),
     claims: mappingObjectSchema,
   }),
+  encrypted_claims: encryptedClaimsSchema.optional(),
   jwt: sharedJwtSchema,
   log: logConfigSchema,
 });
@@ -167,6 +212,26 @@ export const tokenWeaverConfigSchema = z
         });
       }
       strategyNames.add(strategy.name);
+
+      // The encrypted blob is written over the mapped public claims, so a name shared with one
+      // of them would silently replace a claim the config says to publish.
+      const encryptedClaims = strategy.encrypted_claims;
+      if (encryptedClaims) {
+        const publicClaimNames =
+          strategy.type === 'direct'
+            ? strategy.credentials.flatMap((credential) => Object.keys(credential.claims))
+            : Object.keys(strategy.response_mapping.claims);
+
+        if (publicClaimNames.includes(encryptedClaims.claim)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `Strategy ${strategy.name}: encrypted_claims.claim '${encryptedClaims.claim}' ` +
+              'is also a mapped public claim',
+            path: ['strategies'],
+          });
+        }
+      }
     }
 
     const reservedStrategyNames = value.strategies
@@ -191,6 +256,7 @@ export type DirectCredential = DirectStrategyConfig['credentials'][number];
 export type InboundAuthConfig = NonNullable<StrategyConfig['inbound_auth']>;
 export type JwtConfig = StrategyConfig['jwt'];
 export type ErrorMappingConfig = z.infer<typeof errorMappingSchema>;
+export type EncryptedClaimsConfig = z.infer<typeof encryptedClaimsSchema>;
 export type DelegatedLogConfig = z.infer<typeof logConfigSchema>;
 
 function resolveEnvPlaceholders(value: string): string {
