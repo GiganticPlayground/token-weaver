@@ -477,7 +477,14 @@ async function authenticateAny(
     try {
       payload = await verify(input);
       if (decrypt) {
-        // Before authorization, so allow/deny patterns and scopes can live in the blob.
+        // Before authorization, so a failed decryption rejects the request rather than falling
+        // through to an authorization check on a half-read token.
+        //
+        // NOTE: `requirements` and `paths` read TOP-LEVEL claims only. Decryption nests the
+        // decrypted object under the blob claim, so a scope or route list carried inside the
+        // blob does NOT drive authorization — access-control claims stay visible on the token,
+        // secrets go in the blob. Pointing `whitelistClaim` at a name that only exists inside
+        // the blob resolves to "no list configured", i.e. unrestricted.
         payload = await decrypt(payload);
       }
       if (authorize) {
