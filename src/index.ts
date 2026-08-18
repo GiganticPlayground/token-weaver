@@ -5,7 +5,6 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import swaggerUi from 'swagger-ui-express';
-import YAML from 'yaml';
 
 import { config } from './config/index';
 import {
@@ -20,7 +19,6 @@ import { setupShutdown } from './utils/shutdown';
 // Load OpenAPI specification
 export const apiSpecPath: string = join(process.cwd(), 'api/openapi.yaml');
 const apiSpecContent: string = readFileSync(apiSpecPath, 'utf8');
-const apiSpec: swaggerUi.JsonObject = YAML.parse(apiSpecContent) as swaggerUi.JsonObject;
 
 const app = express();
 app.set('trust proxy', config.TRUST_PROXY);
@@ -46,13 +44,29 @@ if (analytics?.enabled) {
 }
 
 if (config.API_DOCS_ENABLED) {
+  // Publish the spec at its own addressable URL, and point the UI at that URL rather than
+  // embedding the document in swagger-ui-init.js. Embedding leaves the spec readable only by
+  // scraping an internal of swagger-ui-express; a plain route lets any consumer - another docs
+  // site, a codegen step, a contract test - fetch it directly.
+  //
+  // Deliberately served OUTSIDE the '/api-docs' prefix: swaggerUi.serve answers every path
+  // under that prefix, so a route beneath it would only work if registered first.
+  app.get('/api-docs.yaml', (_req, res) => {
+    res.type('application/yaml').send(apiSpecContent);
+  });
+
   app.use(
     '/api-docs',
     swaggerUi.serve,
-    swaggerUi.setup(apiSpec, {
+    swaggerUi.setup(null, {
       explorer: true,
       customCss: '.swagger-ui .topbar { display: none }',
       customSiteTitle: 'API Documentation',
+      swaggerOptions: {
+        // Relative, so the UI still finds the spec when this service is mounted behind a
+        // path prefix. Resolves against '/api-docs/' to '/api-docs.yaml'.
+        url: '../api-docs.yaml',
+      },
     }),
   );
 }

@@ -32,7 +32,9 @@ Use this for:
 - `POST /auth/{name}`
 - `GET /.well-known/jwks.json`
 - `GET /health`
-- `GET /api-docs` _(disabled when `API_DOCS_ENABLED=false`)_
+- `GET /api-docs` — Swagger UI _(disabled when `API_DOCS_ENABLED=false`)_
+- `GET /api-docs.yaml` — the OpenAPI document itself, for another docs site, codegen or a
+  contract test to fetch _(disabled with the same flag)_
 
 Routes are bound through the OpenAPI spec in [api/openapi.yaml](/Users/daniellmorris/work/gigaplay/os/token-weaver/api/openapi.yaml) via `express-openapi-validator`.
 
@@ -263,7 +265,7 @@ Security notes:
 | `TOKEN_WEAVER_PRIVATE_KEY_PATH` | unset | Filesystem path to the RSA private key PEM used for signing JWTs |
 | `TOKEN_WEAVER_PRIVATE_KEY` | unset | Inline RSA private key PEM content used for signing JWTs |
 | `TOKEN_WEAVER_KID` | `token-weaver-key` | JWKS key ID included in signed JWT headers and JWKS output |
-| `API_DOCS_ENABLED` | `true` | Mounts the Swagger UI at `/api-docs`; set to `false` to disable in production |
+| `API_DOCS_ENABLED` | `true` | Mounts the Swagger UI at `/api-docs` and the raw spec at `/api-docs.yaml`; set to `false` to disable both in production |
 | `SHUTDOWN_TIMEOUT_MS` | `30000` | Maximum time in milliseconds to wait for in-flight requests to complete on SIGTERM/SIGINT before force-exiting |
 | `REQCAST_CONFIG` | — | Path to a [reqcast](https://github.com/GiganticPlayground/reqcast) request-analytics config; falls back to `./reqcast.config.json` when present, otherwise analytics stay disabled (see `examples/reqcast.config.json`) |
 
