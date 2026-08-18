@@ -7,6 +7,8 @@ import { after, before, describe, it } from 'node:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import YAML from 'yaml';
+
 import { compileAuth, decryptClaims, parseEncryptionKey } from '../../src/auth/index';
 
 /** 32-byte shared key for the encrypted-claim strategies, as base64 (see parseEncryptionKey). */
@@ -924,6 +926,41 @@ void describe('Token Weaver e2e', () => {
     const payload = decodeJwtPart(encodedPayload!);
     assert.equal(payload.sub, 'mapped-user-1');
   });
+
+  void it('publishes the OpenAPI spec at its own URL', async () => {
+    const response = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/api-docs.yaml`,
+    );
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /yaml/);
+
+    // Must be the real document, fetchable by anything - another docs site, codegen, a
+    // contract test - without scraping swagger-ui internals.
+    const spec = YAML.parse(await response.text()) as {
+      openapi?: string;
+      info?: { title?: string };
+      paths?: Record<string, unknown>;
+    };
+    assert.match(spec.openapi ?? '', /^3\./);
+    assert.equal(spec.info?.title, 'Token Weaver API');
+    assert.ok(Object.keys(spec.paths ?? {}).length > 0, 'spec should declare paths');
+  });
+
+  void it('serves the Swagger UI pointed at that URL rather than an embedded doc', async () => {
+    const page = await globalThis.fetch(`http://127.0.0.1:${testContext.servicePort}/api-docs/`);
+    assert.equal(page.status, 200);
+
+    const initScript = await globalThis.fetch(
+      `http://127.0.0.1:${testContext.servicePort}/api-docs/swagger-ui-init.js`,
+    );
+    assert.equal(initScript.status, 200);
+    const initBody = await initScript.text();
+    // The UI fetches the spec by URL now, so the document is no longer inlined here.
+    assert.match(initBody, /api-docs\.yaml/);
+    assert.ok(!initBody.includes('"openapi": "3.'), 'spec should not be embedded in swagger-ui-init.js');
+  });
+
 });
 
 void describe('Token Weaver e2e — HS256-only deployment', () => {
