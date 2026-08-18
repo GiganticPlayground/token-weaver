@@ -81,3 +81,23 @@ strategies:
         claims:
           sub: hmac-client
           scope: mobile
+
+  # Token exchange: verify another issuer's JWT against their JWKS, then mint ours from its
+  # claims. Keeps consumers on one issuer and one claim vocabulary while upstream IdPs vary.
+  # - name: ipb
+  #   type: jwt
+  #   credential_path: $.request.headers.authorization   # default; 'Bearer ' tolerated
+  #   verify:
+  #     jwks_uri: https://idp.example.com/.well-known/jwks.json
+  #     issuer: https://idp.example.com/
+  #     audience: ipb
+  #     requirements:
+  #       - { type: scope, value: 'ipb:play' }
+  #   claims:
+  #     sub: $.request.jwt.sub          # the verified upstream payload lives at $.request.jwt
+  #     routes:
+  #       whitelist: ['ipb/v1/getPlayerState']
+  #   jwt:
+  #     algorithm: RS256
+  #     issuer: token-weaver
+  #     ttl: 600

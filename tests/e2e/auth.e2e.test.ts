@@ -7,6 +7,7 @@ import { after, before, describe, it } from 'node:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import { SignJWT, exportJWK, importPKCS8, importSPKI } from 'jose';
 import YAML from 'yaml';
 
 import { compileAuth, decryptClaims, parseEncryptionKey } from '../../src/auth/index';
@@ -1058,5 +1059,198 @@ void describe('Token Weaver e2e — HS256-only deployment', () => {
     assert.equal(jwksResponse.status, 200);
     const jwks = (await jwksResponse.json()) as { keys: Array<Record<string, unknown>> };
     assert.equal(jwks.keys.length, 0);
+  });
+});
+
+/**
+ * Token exchange: an upstream identity provider's JWT is traded for one of ours.
+ *
+ * The value is that consumers trust ONE issuer and one claim vocabulary while upstream IdPs
+ * change behind it - so these tests check both that the upstream token is genuinely verified
+ * (signature, issuer, required claims) and that OUR token carries OUR claims, not a passthrough
+ * of theirs.
+ */
+void describe('Token Weaver e2e — JWT exchange strategy', () => {
+  const exchangeContext = {} as TestContext & { idpServer: Server; signUpstream: (claims: Record<string, unknown>, opts?: { issuer?: string }) => Promise<string>; rogueSign: (claims: Record<string, unknown>) => Promise<string> };
+
+  const IDP_ISSUER = 'https://idp.test/';
+
+  void before(async () => {
+    exchangeContext.tmpDir = mkdtempSync(join(tmpdir(), 'token-weaver-exchange-'));
+
+    // The upstream IdP: an RSA key pair, published as a JWKS the service will fetch.
+    const idp = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    const idpPrivate = await importPKCS8(idp.privateKey, 'RS256');
+    const idpPublicJwk = await exportJWK(await importSPKI(idp.publicKey, 'RS256'));
+    idpPublicJwk.kid = 'idp-key-1';
+    idpPublicJwk.alg = 'RS256';
+    idpPublicJwk.use = 'sig';
+
+    // A DIFFERENT key, never published - used to prove signature verification actually happens.
+    const rogue = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    const roguePrivate = await importPKCS8(rogue.privateKey, 'RS256');
+
+    exchangeContext.signUpstream = (claims, opts = {}) =>
+      new SignJWT(claims)
+        .setProtectedHeader({ alg: 'RS256', kid: 'idp-key-1' })
+        .setIssuer(opts.issuer ?? IDP_ISSUER)
+        .setAudience('ipb')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(idpPrivate);
+
+    exchangeContext.rogueSign = (claims) =>
+      new SignJWT(claims)
+        .setProtectedHeader({ alg: 'RS256', kid: 'idp-key-1' })
+        .setIssuer(IDP_ISSUER)
+        .setAudience('ipb')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(roguePrivate);
+
+    exchangeContext.idpServer = createServer((req, res) => {
+      if (req.url === '/.well-known/jwks.json') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ keys: [idpPublicJwk] }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await startServer(exchangeContext.idpServer);
+    const idpPort = getListeningPort(exchangeContext.idpServer);
+
+    const servicePrivateKey = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    }).privateKey;
+    const privateKeyPath = join(exchangeContext.tmpDir, 'token-weaver.key.pem');
+    writeFileSync(privateKeyPath, servicePrivateKey, 'utf8');
+
+    const configPath = join(exchangeContext.tmpDir, 'token-weaver.config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        strategies: [
+          {
+            name: 'ipb',
+            type: 'jwt',
+            verify: {
+              jwks_uri: `http://127.0.0.1:${idpPort}/.well-known/jwks.json`,
+              issuer: IDP_ISSUER,
+              audience: 'ipb',
+              requirements: [{ type: 'scope', value: 'ipb:play' }],
+            },
+            claims: {
+              // OUR vocabulary, built from THEIR identity.
+              sub: '$.request.jwt.sub',
+              upstreamEmail: '$.request.jwt.email',
+              routes: { whitelist: ['ipb/v1/getPlayerState'] },
+            },
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+        ],
+      }),
+    );
+
+    exchangeContext.servicePort = await getAvailablePort();
+    exchangeContext.output = [];
+    exchangeContext.serviceProcess = spawn(process.execPath, ['--import=tsx', 'src/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        PORT: String(exchangeContext.servicePort),
+        TOKEN_WEAVER_CONFIG_PATH: configPath,
+        TOKEN_WEAVER_PRIVATE_KEY_PATH: privateKeyPath,
+        TOKEN_WEAVER_KID: 'token-weaver-exchange',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    exchangeContext.serviceProcess.stdout.on('data', (chunk) => {
+      exchangeContext.output.push(String(chunk));
+    });
+    exchangeContext.serviceProcess.stderr.on('data', (chunk) => {
+      exchangeContext.output.push(String(chunk));
+    });
+
+    await waitForServiceReady(exchangeContext.servicePort, exchangeContext.output);
+  });
+
+  void after(async () => {
+    exchangeContext.serviceProcess.kill('SIGTERM');
+    await new Promise((resolve) => exchangeContext.serviceProcess.once('exit', resolve));
+    await new Promise((resolve) => exchangeContext.idpServer.close(resolve));
+    rmSync(exchangeContext.tmpDir, { recursive: true, force: true });
+  });
+
+  const exchange = async (authorization?: string) =>
+    globalThis.fetch(`http://127.0.0.1:${exchangeContext.servicePort}/auth/ipb`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authorization ? { Authorization: authorization } : {}),
+      },
+      body: JSON.stringify({}),
+    });
+
+  void it('exchanges a verified upstream token for one carrying OUR claims', async () => {
+    const upstream = await exchangeContext.signUpstream({
+      sub: 'upstream-user-42',
+      email: 'player@idp.test',
+      scope: ['ipb:play'],
+    });
+
+    const response = await exchange(`Bearer ${upstream}`);
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as { token: string; expires_in: number };
+    assert.equal(body.expires_in, 600);
+
+    const [, encodedPayload] = body.token.split('.');
+    const payload = decodeJwtPart(encodedPayload!);
+    // Ours, not a passthrough: our issuer, our ttl, and claims we chose.
+    assert.equal(payload.iss, 'token-weaver');
+    assert.equal(payload.sub, 'upstream-user-42');
+    assert.equal(payload.upstreamEmail, 'player@idp.test');
+    assert.deepEqual(payload.routes, { whitelist: ['ipb/v1/getPlayerState'] });
+    // The upstream's own scope is NOT carried over unless mapped.
+    assert.equal(payload.scope, undefined);
+  });
+
+  void it('rejects a token signed by a key the JWKS does not publish', async () => {
+    const forged = await exchangeContext.rogueSign({ sub: 'attacker', scope: ['ipb:play'] });
+    const response = await exchange(`Bearer ${forged}`);
+    assert.equal(response.status, 401);
+  });
+
+  void it('rejects a token from a different issuer', async () => {
+    const wrongIssuer = await exchangeContext.signUpstream(
+      { sub: 'upstream-user-42', scope: ['ipb:play'] },
+      { issuer: 'https://someone-else.test/' },
+    );
+    const response = await exchange(`Bearer ${wrongIssuer}`);
+    assert.equal(response.status, 401);
+  });
+
+  void it('rejects a verified token that lacks the required scope with 403, not 401', async () => {
+    // Distinguishing these matters: the caller learns their token is fine but not entitled.
+    const noScope = await exchangeContext.signUpstream({ sub: 'upstream-user-42', scope: ['other'] });
+    const response = await exchange(`Bearer ${noScope}`);
+    assert.equal(response.status, 403);
+  });
+
+  void it('rejects a request with no token', async () => {
+    const response = await exchange();
+    assert.equal(response.status, 401);
   });
 });

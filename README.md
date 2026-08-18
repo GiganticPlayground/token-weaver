@@ -27,6 +27,48 @@ Use this for:
 - player or account systems that decide authentication dynamically
 - flows where the subject record may not exist until the upstream system handles the request
 
+### JWT (token exchange)
+
+Verifies a JWT issued by somebody else - an identity provider, another gateway - against their
+JWKS, then issues one of yours built from its claims.
+
+Use this when you want to control what YOUR token says. Consumers trust one issuer and one claim
+vocabulary; upstream identity providers can change behind it, because their claims are mapped
+here rather than taught to every consumer. Verification happens in-process, so unlike a
+`delegated` strategy pointed at an introspection endpoint there is no network hop per exchange
+(the JWKS itself is fetched and cached once).
+
+```yaml
+strategies:
+  - name: ipb
+    type: jwt
+    # Where the inbound token is. Defaults to the Authorization header; 'Bearer ' is tolerated.
+    credential_path: $.request.headers.authorization
+    verify:
+      jwks_uri: https://idp.example.com/.well-known/jwks.json
+      issuer: https://idp.example.com/
+      audience: ipb                     # optional
+      requirements:                     # optional - claims the inbound token must carry
+        - { type: scope, value: 'ipb:play' }
+    claims:
+      # The verified upstream payload is at $.request.jwt
+      sub: $.request.jwt.sub
+      email: $.request.jwt.email
+      # ...alongside anything you want to assert yourself
+      routes:
+        whitelist: ['ipb/v1/getPlayerState']
+    jwt:
+      algorithm: RS256
+      issuer: token-weaver
+      ttl: 600
+```
+
+Only mapped claims are carried over - an upstream `scope` (or anything else) does **not** appear
+in the issued token unless the mapping says so. Failures distinguish the two cases a caller
+cares about: **401** when the token cannot be verified (bad signature, wrong issuer or audience,
+expired) and **403** when it verifies but does not satisfy `requirements`. `encrypted_claims`
+works the same as for other strategies.
+
 ## Endpoints
 
 - `POST /auth/{name}`
