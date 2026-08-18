@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 
 import { JwtService } from './jwt.service';
+import { compileAuth, extractBearerToken, type CompiledAuth } from '../auth/auth.core';
 import { encryptClaims, parseEncryptionKey } from '../auth/encrypted-claims';
 import { config } from '../config/index';
 import type {
@@ -8,6 +9,7 @@ import type {
   DirectCredential,
   ErrorMappingConfig,
   InboundAuthConfig,
+  JwtStrategyConfig,
   StrategyConfig,
   TokenWeaverConfig,
 } from '../config/token-weaver.config';
@@ -28,6 +30,8 @@ type RequestContext = {
     params: Record<string, unknown>;
     path: string;
     method: string;
+    /** Verified upstream claims - only set for the 'jwt' exchange strategy. */
+    jwt?: Record<string, unknown>;
   };
 };
 
@@ -87,7 +91,7 @@ function getHeaderValue(
   return value;
 }
 
-function buildRequestContext(req: Request): RequestContext {
+function buildRequestContext(req: Request, verifiedJwt?: Record<string, unknown>): RequestContext {
   return {
     request: {
       body: req.body,
@@ -96,6 +100,9 @@ function buildRequestContext(req: Request): RequestContext {
       params: req.params as Record<string, unknown>,
       path: req.path,
       method: req.method,
+      // Present only for the 'jwt' exchange strategy, so mappings can read the verified
+      // upstream claims as $.request.jwt.<claim>.
+      ...(verifiedJwt ? { jwt: verifiedJwt } : {}),
     },
   };
 }
@@ -178,6 +185,12 @@ export class TokenWeaverService {
   private readonly jwtService: JwtService;
   private readonly strategiesByName: ReadonlyMap<string, StrategyConfig>;
   private readonly encryptionKeysByStrategy: ReadonlyMap<string, Uint8Array>;
+  /**
+   * Compiled JWKS verifiers for 'jwt' strategies, keyed by strategy name. Compiled ONCE:
+   * compileAuth holds the remote key set cache, so rebuilding it per request would refetch
+   * the JWKS on every exchange.
+   */
+  private readonly jwtVerifiersByStrategy: ReadonlyMap<string, CompiledAuth>;
 
   constructor(private readonly gatewayConfig: TokenWeaverConfig) {
     this.strategiesByName = new Map(
@@ -198,6 +211,24 @@ export class TokenWeaverService {
         );
         return [[strategy.name, key] as const];
       }),
+    );
+
+    this.jwtVerifiersByStrategy = new Map(
+      gatewayConfig.strategies
+        .filter((strategy): strategy is JwtStrategyConfig => strategy.type === 'jwt')
+        .map(
+          (strategy) =>
+            [
+              strategy.name,
+              compileAuth({
+                mode: 'jwt-jwks',
+                jwksUri: strategy.verify.jwks_uri,
+                issuer: strategy.verify.issuer,
+                ...(strategy.verify.audience ? { audience: strategy.verify.audience } : {}),
+                ...(strategy.verify.requirements ? { requirements: strategy.verify.requirements } : {}),
+              }),
+            ] as const,
+        ),
     );
 
     // Only load the RSA private key when at least one strategy uses RS256 signing.
@@ -221,6 +252,10 @@ export class TokenWeaverService {
 
     if (strategy.type === 'direct') {
       return this.handleDirectStrategy(strategy, req);
+    }
+
+    if (strategy.type === 'jwt') {
+      return this.handleJwtStrategy(strategy, req);
     }
 
     return this.handleDelegatedStrategy(strategy, req);
@@ -312,6 +347,50 @@ export class TokenWeaverService {
     const mappedClaims = ensureMappedClaims(mapValue(matchedCredential.claims, requestContext), strategy.name);
 
     return this.issueToken(strategy, mappedClaims, requestContext);
+  }
+
+  /**
+   * Exchange an upstream JWT for ours: verify signature/issuer/audience (and any required
+   * claims) against the configured JWKS, then mint our token from the mapped claims.
+   *
+   * Failures surface as the auth core's own status codes - 401 for an unverifiable token, 403
+   * when it verifies but does not meet `requirements` - so a caller can tell "your token is
+   * bad" from "your token is fine but not allowed to do this".
+   */
+  private async handleJwtStrategy(
+    strategy: JwtStrategyConfig,
+    req: Request,
+  ): Promise<AuthSuccessPayload> {
+    const requestContext = buildRequestContext(req) as Record<string, unknown>;
+    const rawCredential = resolvePath(strategy.credential_path, requestContext);
+    if (typeof rawCredential !== 'string' || rawCredential.length === 0) {
+      throw new HttpError(401, 'Missing token in request');
+    }
+
+    const verifier = this.jwtVerifiersByStrategy.get(strategy.name);
+    if (!verifier) {
+      // Unreachable: verifiers are built for every jwt strategy at construction.
+      throw new HttpError(500, `No compiled verifier for strategy: ${strategy.name}`);
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      // extractBearerToken tolerates a bare token as well as 'Bearer <token>', so
+      // credential_path can point at the Authorization header or at a bare field.
+      payload = (await verifier({ authorizationHeader: `Bearer ${extractBearerToken(rawCredential)}` })) as Record<
+        string,
+        unknown
+      >;
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 401;
+      throw new HttpError(status, (error as Error).message || 'Token verification failed');
+    }
+
+    // Re-derive the context WITH the verified claims, so mappings can read $.request.jwt.*
+    const mappingContext = buildRequestContext(req, payload) as Record<string, unknown>;
+    const claims = mapValue(strategy.claims, mappingContext) as Record<string, unknown>;
+
+    return this.issueToken(strategy, claims, mappingContext);
   }
 
   private async handleDelegatedStrategy(

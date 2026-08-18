@@ -141,6 +141,46 @@ const directStrategySchema = z.object({
   jwt: sharedJwtSchema,
 });
 
+/**
+ * Token exchange: verify a JWT minted by somebody else, then issue ours from its claims.
+ *
+ * The point is to keep control of what OUR token says. A consumer trusts one issuer (this
+ * service) and one claim vocabulary, while upstream identity providers come and go behind it -
+ * their claims are mapped here rather than taught to every consumer.
+ *
+ * Verification reuses the same JWKS path as the exported auth module, so there is one
+ * implementation of signature checking in this repo.
+ */
+const jwtStrategySchema = z.object({
+  name: z.string().min(1),
+  type: z.literal('jwt'),
+  inbound_auth: inboundAuthSchema.optional(),
+  /** Where the inbound token is. Default: the Authorization header, 'Bearer ' tolerated. */
+  credential_path: z.string().optional().default('$.request.headers.authorization'),
+  verify: z.object({
+    jwks_uri: z.string().min(1),
+    issuer: z.string().min(1),
+    audience: z.string().min(1).optional(),
+    /** Claims the inbound token must carry, e.g. a scope that authorizes the exchange. */
+    requirements: z
+      .array(
+        z.union([
+          z.object({ type: z.literal('scope'), value: z.string().min(1) }),
+          z.object({
+            type: z.literal('claim_includes'),
+            claim: z.string().min(1),
+            value: z.string().min(1),
+          }),
+        ]),
+      )
+      .optional(),
+  }),
+  /** Mapped like any other strategy; the verified payload is at $.request.jwt. */
+  claims: mappingObjectSchema,
+  encrypted_claims: encryptedClaimsSchema.optional(),
+  jwt: sharedJwtSchema,
+});
+
 const upstreamAuthSchema = z
   .object({
     type: z.enum(['bearer', 'api_key', 'none']),
@@ -195,6 +235,7 @@ const delegatedStrategySchema = z.object({
 const strategySchema = z.discriminatedUnion('type', [
   directStrategySchema,
   delegatedStrategySchema,
+  jwtStrategySchema,
 ]);
 
 export const tokenWeaverConfigSchema = z
@@ -220,7 +261,9 @@ export const tokenWeaverConfigSchema = z
         const publicClaimNames =
           strategy.type === 'direct'
             ? strategy.credentials.flatMap((credential) => Object.keys(credential.claims))
-            : Object.keys(strategy.response_mapping.claims);
+            : strategy.type === 'jwt'
+              ? Object.keys(strategy.claims)
+              : Object.keys(strategy.response_mapping.claims);
 
         if (publicClaimNames.includes(encryptedClaims.claim)) {
           ctx.addIssue({
@@ -252,6 +295,7 @@ export type TokenWeaverConfig = z.infer<typeof tokenWeaverConfigSchema>;
 export type StrategyConfig = TokenWeaverConfig['strategies'][number];
 export type DirectStrategyConfig = Extract<StrategyConfig, { type: 'direct' }>;
 export type DelegatedStrategyConfig = Extract<StrategyConfig, { type: 'delegated' }>;
+export type JwtStrategyConfig = Extract<StrategyConfig, { type: 'jwt' }>;
 export type DirectCredential = DirectStrategyConfig['credentials'][number];
 export type InboundAuthConfig = NonNullable<StrategyConfig['inbound_auth']>;
 export type JwtConfig = StrategyConfig['jwt'];
