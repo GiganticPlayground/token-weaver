@@ -64,7 +64,45 @@ strategies:
 ```
 
 Only mapped claims are carried over - an upstream `scope` (or anything else) does **not** appear
-in the issued token unless the mapping says so. Failures distinguish the two cases a caller
+in the issued token unless the mapping says so.
+
+#### Per-client claim sets on one endpoint
+
+A `jwt` strategy can issue different claims depending on which client is calling, so a kiosk
+build and a mobile app share one URL instead of needing a strategy each:
+
+```yaml
+    claims:                       # base, for every client
+      sub: $.request.jwt.sub
+    client_id_path: $.request.body.clientId   # default
+    clients:
+      - client_id: kiosk-a1b2
+        claims:
+          routes: { whitelist: ['ipb/v1/getPlayerState'] }
+      - client_id: mobile-c3d4
+        claims:
+          routes: { whitelist: ['ipb/v1/*'] }
+```
+
+A matched entry's claims are layered over the base **per top-level claim** - a client that maps
+`routes` replaces the base `routes` outright rather than being deep-merged into it, so a client's
+permissions read exactly as written.
+
+An unknown or absent identifier is refused with 401. Set `require_known_client: false` to fall
+back to the base claims instead, when those are a deliberate public tier.
+
+**The identifier is supplied by the caller**, so on its own it lets a client choose its own claim
+set - it is only as strong as its secrecy. For anything beyond internal use, set `client_claim`
+to the name of a verified claim on the inbound token that must agree with the identifier (equal,
+or containing it when the claim is an array):
+
+```yaml
+    client_claim: client_ids
+```
+
+With that, the upstream token authorizes which clients the caller may present, and the identifier
+only selects among sets that token already permits. A mismatch is a **403** - the token is valid,
+it just does not authorize that client - as distinct from the 401 an unverifiable token gets. Failures distinguish the two cases a caller
 cares about: **401** when the token cannot be verified (bad signature, wrong issuer or audience,
 expired) and **403** when it verifies but does not satisfy `requirements`. `encrypted_claims`
 works the same as for other strategies.

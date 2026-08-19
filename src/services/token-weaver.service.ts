@@ -388,9 +388,59 @@ export class TokenWeaverService {
 
     // Re-derive the context WITH the verified claims, so mappings can read $.request.jwt.*
     const mappingContext = buildRequestContext(req, payload) as Record<string, unknown>;
-    const claims = mapValue(strategy.claims, mappingContext) as Record<string, unknown>;
+    let claims = mapValue(strategy.claims, mappingContext) as Record<string, unknown>;
+
+    if (strategy.clients) {
+      const clientClaims = this.resolveClientClaims(strategy, mappingContext, payload);
+      // Merged per TOP-LEVEL claim, not deep: a client that maps 'routes' replaces the base
+      // 'routes' outright, so its permissions read exactly as written.
+      claims = { ...claims, ...clientClaims };
+    }
 
     return this.issueToken(strategy, claims, mappingContext);
+  }
+
+  /**
+   * Pick the claim set for the calling client, when a `jwt` strategy defines `clients`.
+   *
+   * The identifier is supplied by the caller, so on its own it lets a client choose its own
+   * claims - it is only as strong as its secrecy. `client_claim` closes that: the inbound
+   * VERIFIED token must agree with the identifier, so the upstream authorizes the client and the
+   * identifier merely selects among sets that token already permits.
+   */
+  private resolveClientClaims(
+    strategy: JwtStrategyConfig,
+    mappingContext: Record<string, unknown>,
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const rawClientId = resolvePath(strategy.client_id_path, mappingContext);
+    const clientId = typeof rawClientId === 'string' ? rawClientId : undefined;
+
+    const matched = clientId
+      ? strategy.clients?.find((client) => client.client_id === clientId)
+      : undefined;
+
+    if (!matched) {
+      if (strategy.require_known_client) {
+        // Deliberately does not echo the value back, and does not distinguish absent from
+        // unknown: neither tells a caller anything useful, and both are the same refusal.
+        throw new HttpError(401, 'Unknown or missing client identifier');
+      }
+      return {};
+    }
+
+    if (strategy.client_claim) {
+      const asserted = payload[strategy.client_claim];
+      const permitted = Array.isArray(asserted)
+        ? asserted.some((entry) => entry === clientId)
+        : asserted === clientId;
+      if (!permitted) {
+        // 403, not 401: the token is valid, it just does not authorize this client.
+        throw new HttpError(403, 'Token does not authorize the supplied client identifier');
+      }
+    }
+
+    return mapValue(matched.claims, mappingContext) as Record<string, unknown>;
   }
 
   private async handleDelegatedStrategy(

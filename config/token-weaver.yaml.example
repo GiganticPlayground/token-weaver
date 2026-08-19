@@ -97,6 +97,21 @@ strategies:
   #     sub: $.request.jwt.sub          # the verified upstream payload lives at $.request.jwt
   #     routes:
   #       whitelist: ['ipb/v1/getPlayerState']
+  #   # Optional: one endpoint, different claims per calling client. A matched entry is layered
+  #   # over the base claims per top-level claim. An unknown identifier is refused (401) unless
+  #   # require_known_client is false.
+  #   client_id_path: $.request.body.clientId   # default
+  #   # The identifier comes from the caller, so it is only as strong as its secrecy. Set
+  #   # client_claim to a VERIFIED claim that must agree with it, and the upstream token decides
+  #   # which clients a caller may present (mismatch = 403).
+  #   client_claim: client_ids
+  #   clients:
+  #     - client_id: kiosk-a1b2
+  #       claims:
+  #         routes: { whitelist: ['ipb/v1/getPlayerState'] }
+  #     - client_id: mobile-c3d4
+  #       claims:
+  #         routes: { whitelist: ['ipb/v1/*'] }
   #   jwt:
   #     algorithm: RS256
   #     issuer: token-weaver
