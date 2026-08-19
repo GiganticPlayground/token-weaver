@@ -21,9 +21,16 @@
  *   exceed timeout_ms              -> 503
  *
  * The module runs IN-PROCESS with the service's privileges: it is deployment code, not user
- * input. Mounted anywhere under the app directory it can also import Token Weaver's own
- * dependencies (jose, yaml, zod, ...) directly, since node resolves from there.
+ * input. Mounted under the app directory (e.g. /app/custom/) it can also import Token Weaver's
+ * own dependencies directly - logra, jose, yaml, zod - since node resolves node_modules by
+ * walking up from the module. Mounted outside it, any import fails at startup.
  */
+
+// The injected `logger` needs no import and inherits the service's level/format; importing logra
+// gives this module its own named logger, which is usually what you want for app logs.
+import { createLogger } from 'logra';
+
+const log = createLogger('custom-login');
 
 /**
  * @param {object} ctx
@@ -35,6 +42,8 @@
  * @param {new (status: number, message: string) => Error} ctx.HttpError
  */
 export default async function authenticate({ request, options, logger, httpRequest, HttpError }) {
+  log.debug('custom login invoked', { path: request.path });
+
   const { username, passcode } = request.body ?? {};
 
   // Reject with the status that fits. A bare `return null` is a 401.

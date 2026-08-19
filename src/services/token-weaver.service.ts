@@ -513,10 +513,17 @@ export class TokenWeaverService {
       try {
         module = (await import(pathToFileURL(strategy.handler).href)) as Record<string, unknown>;
       } catch (error) {
+        const message = (error as Error).message;
+        // A handler importing Token Weaver's own dependencies only resolves them when it sits
+        // under the app directory, because node resolves node_modules by walking up from the
+        // module. Outside it, the failure is a bare "Cannot find package", which does not point
+        // at the actual problem.
+        const hint = /Cannot find package/.test(message)
+          ? ' - a handler that imports Token Weaver dependencies must be mounted under the app' +
+            ' directory (e.g. /app/custom/), since node resolves node_modules from the module'
+          : '';
         throw new Error(
-          `Strategy ${strategy.name}: could not load handler '${strategy.handler}': ${
-            (error as Error).message
-          }`,
+          `Strategy ${strategy.name}: could not load handler '${strategy.handler}': ${message}${hint}`,
         );
       }
 

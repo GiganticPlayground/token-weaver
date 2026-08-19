@@ -1624,4 +1624,12 @@ void describe('Token Weaver e2e — custom handler startup validation', () => {
   void it('exits when the module exports no callable', async () => {
     assert.match(await startFailing('export const something = 42;'), /does not export a function/);
   });
+
+  // A handler outside the app directory cannot resolve Token Weaver's dependencies, and the bare
+  // "Cannot find package" that node reports does not point at the actual problem.
+  void it('explains that an importing handler must be mounted under the app directory', async () => {
+    const output = await startFailing("import { createLogger } from 'logra';\nexport default () => ({ sub: createLogger });");
+    assert.match(output, /Cannot find package 'logra'/);
+    assert.match(output, /must be mounted under the app directory/);
+  });
 });

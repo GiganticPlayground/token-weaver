@@ -149,8 +149,26 @@ and 503 through and collapses other 5xx to a bare 500.
 
 Handlers receive `{ request, options, logger, httpRequest, HttpError }`, where `request` is shaped
 exactly as the `$.request.*` mapping expressions see it. ESM and CommonJS modules both load.
-Mounted anywhere under the app directory, a handler can also import Token Weaver's own
-dependencies (`jose`, `yaml`, `zod`, ...) directly, since node resolves from there.
+
+The injected `logger` is Token Weaver's own [logra](https://github.com/GiganticPlayground/logra)
+logger, so app logs need no imports and inherit the service's level and format. A handler can also
+import `logra` (or `jose`, `yaml`, `zod`, ...) directly to make its own named logger:
+
+```js
+import { createLogger, LOG_TYPES } from 'logra';
+
+const log = createLogger('pictures-login', { style: LOG_TYPES.PRETTY });
+
+export default async function authenticate({ request }) {
+  log.info('resolving profile', { user: request.body?.username });
+  ...
+}
+```
+
+**Imports only resolve when the handler is mounted under the app directory** (e.g.
+`/app/custom/…`), because node resolves `node_modules` by walking up from the module. A handler
+outside it that imports anything fails at startup with `Cannot find package 'logra'` — the error
+says so, and the container exits rather than serving.
 
 **This is arbitrary code running in-process with the service's privileges** — deployment code, not
 user input. Whoever can set `handler` can already set the signing key. The module is imported
