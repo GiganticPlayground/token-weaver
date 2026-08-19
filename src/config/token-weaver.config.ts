@@ -175,8 +175,47 @@ const jwtStrategySchema = z.object({
       )
       .optional(),
   }),
-  /** Mapped like any other strategy; the verified payload is at $.request.jwt. */
+  /**
+   * Base claims for every client, mapped like any other strategy; the verified payload is at
+   * $.request.jwt. A matched `clients` entry's claims are layered over these.
+   */
   claims: mappingObjectSchema,
+  /**
+   * Optional per-client claim sets, so ONE endpoint can issue different tokens depending on
+   * which client is calling (a kiosk build, a mobile app) instead of needing a strategy - and
+   * therefore a URL - per client.
+   *
+   * A matched entry's claims are merged over `claims` PER TOP-LEVEL CLAIM: a client that maps
+   * `routes` replaces the base `routes` wholesale rather than being deep-merged into it, so a
+   * client's permissions read exactly as written instead of depending on what the base said.
+   */
+  clients: z
+    .array(
+      z.object({
+        client_id: z.string().min(1),
+        claims: mappingObjectSchema,
+      }),
+    )
+    .min(1)
+    .optional(),
+  /** Where the client identifier is read from. Only used when `clients` is set. */
+  client_id_path: z.string().optional().default('$.request.body.clientId'),
+  /**
+   * Whether an unrecognized (or absent) client identifier is rejected. Default TRUE: the client
+   * selects which claims it gets, so an unknown one silently falling back to the base claims
+   * would be a quiet grant. Set false only when the base claims are a deliberate public tier.
+   */
+  require_known_client: z.boolean().optional().default(true),
+  /**
+   * Optional hardening, and the recommended way to run this in production: the name of a
+   * VERIFIED claim on the inbound token that must agree with the supplied client identifier
+   * (equal, or containing it when the claim is an array).
+   *
+   * Without it the caller picks its own claim set by sending an identifier, so the identifier is
+   * only as strong as its secrecy. With it the upstream token authorizes the client and the
+   * identifier merely selects among sets the token already permits.
+   */
+  client_claim: z.string().min(1).optional(),
   encrypted_claims: encryptedClaimsSchema.optional(),
   jwt: sharedJwtSchema,
 });
@@ -254,6 +293,20 @@ export const tokenWeaverConfigSchema = z
       }
       strategyNames.add(strategy.name);
 
+      if (strategy.type === 'jwt' && strategy.clients) {
+        const seen = new Set<string>();
+        for (const client of strategy.clients) {
+          if (seen.has(client.client_id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Strategy ${strategy.name}: duplicate clients.client_id '${client.client_id}'`,
+              path: ['strategies'],
+            });
+          }
+          seen.add(client.client_id);
+        }
+      }
+
       // The encrypted blob is written over the mapped public claims, so a name shared with one
       // of them would silently replace a claim the config says to publish.
       const encryptedClaims = strategy.encrypted_claims;
@@ -262,7 +315,10 @@ export const tokenWeaverConfigSchema = z
           strategy.type === 'direct'
             ? strategy.credentials.flatMap((credential) => Object.keys(credential.claims))
             : strategy.type === 'jwt'
-              ? Object.keys(strategy.claims)
+              ? [
+                  ...Object.keys(strategy.claims),
+                  ...(strategy.clients ?? []).flatMap((client) => Object.keys(client.claims)),
+                ]
               : Object.keys(strategy.response_mapping.claims);
 
         if (publicClaimNames.includes(encryptedClaims.claim)) {

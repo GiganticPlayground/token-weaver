@@ -1158,6 +1158,47 @@ void describe('Token Weaver e2e — JWT exchange strategy', () => {
             },
             jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
           },
+          // One endpoint, different claims per calling client.
+          {
+            name: 'ipb-clients',
+            type: 'jwt',
+            verify: {
+              jwks_uri: `http://127.0.0.1:${idpPort}/.well-known/jwks.json`,
+              issuer: IDP_ISSUER,
+            },
+            claims: { sub: '$.request.jwt.sub', tier: 'base' },
+            clients: [
+              { client_id: 'kiosk-a1b2', claims: { tier: 'kiosk', routes: { whitelist: ['ipb/v1/getPlayerState'] } } },
+              { client_id: 'mobile-c3d4', claims: { tier: 'mobile', routes: { whitelist: ['ipb/v1/*'] } } },
+            ],
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+          // Same, but the client identifier must be corroborated by a verified claim.
+          {
+            name: 'ipb-bound-clients',
+            type: 'jwt',
+            verify: {
+              jwks_uri: `http://127.0.0.1:${idpPort}/.well-known/jwks.json`,
+              issuer: IDP_ISSUER,
+            },
+            client_claim: 'client_ids',
+            claims: { sub: '$.request.jwt.sub' },
+            clients: [{ client_id: 'kiosk-a1b2', claims: { tier: 'kiosk' } }],
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+          // Unknown client falls back to the base claims instead of being refused.
+          {
+            name: 'ipb-open-clients',
+            type: 'jwt',
+            verify: {
+              jwks_uri: `http://127.0.0.1:${idpPort}/.well-known/jwks.json`,
+              issuer: IDP_ISSUER,
+            },
+            require_known_client: false,
+            claims: { sub: '$.request.jwt.sub', tier: 'public' },
+            clients: [{ client_id: 'kiosk-a1b2', claims: { tier: 'kiosk' } }],
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
         ],
       }),
     );
@@ -1252,5 +1293,93 @@ void describe('Token Weaver e2e — JWT exchange strategy', () => {
   void it('rejects a request with no token', async () => {
     const response = await exchange();
     assert.equal(response.status, 401);
+  });
+
+  // One endpoint, per-client claim sets --------------------------------------------------------
+
+  const exchangeAs = async (strategy: string, body: Record<string, unknown>, authorization?: string) =>
+    globalThis.fetch(`http://127.0.0.1:${exchangeContext.servicePort}/auth/${strategy}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authorization ? { Authorization: authorization } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+  const claimsOf = async (response: globalThis.Response) => {
+    const body = (await response.json()) as { token: string };
+    const [, encodedPayload] = body.token.split('.');
+    return decodeJwtPart(encodedPayload!);
+  };
+
+  void it('issues different claims per client from a single endpoint', async () => {
+    const upstream = await exchangeContext.signUpstream({ sub: 'user-1', scope: ['ipb:play'] });
+
+    const kiosk = await exchangeAs('ipb-clients', { clientId: 'kiosk-a1b2' }, `Bearer ${upstream}`);
+    assert.equal(kiosk.status, 200);
+    const kioskClaims = await claimsOf(kiosk);
+    assert.equal(kioskClaims.tier, 'kiosk');
+    assert.deepEqual(kioskClaims.routes, { whitelist: ['ipb/v1/getPlayerState'] });
+
+    const mobile = await exchangeAs('ipb-clients', { clientId: 'mobile-c3d4' }, `Bearer ${upstream}`);
+    assert.equal(mobile.status, 200);
+    const mobileClaims = await claimsOf(mobile);
+    assert.equal(mobileClaims.tier, 'mobile');
+    assert.deepEqual(mobileClaims.routes, { whitelist: ['ipb/v1/*'] });
+
+    // Same upstream identity in both, so only the client-selected claims differ.
+    assert.equal(kioskClaims.sub, 'user-1');
+    assert.equal(mobileClaims.sub, 'user-1');
+  });
+
+  void it('layers client claims over the base per top-level claim', async () => {
+    const upstream = await exchangeContext.signUpstream({ sub: 'user-1', scope: ['ipb:play'] });
+    const claims = await claimsOf(
+      await exchangeAs('ipb-clients', { clientId: 'kiosk-a1b2' }, `Bearer ${upstream}`),
+    );
+    // 'tier' came from the client and overrode the base value; 'sub' came from the base.
+    assert.equal(claims.tier, 'kiosk');
+    assert.equal(claims.sub, 'user-1');
+  });
+
+  void it('refuses an unknown or missing client identifier by default', async () => {
+    const upstream = await exchangeContext.signUpstream({ sub: 'user-1', scope: ['ipb:play'] });
+
+    const unknown = await exchangeAs('ipb-clients', { clientId: 'not-a-client' }, `Bearer ${upstream}`);
+    assert.equal(unknown.status, 401);
+
+    const absent = await exchangeAs('ipb-clients', {}, `Bearer ${upstream}`);
+    assert.equal(absent.status, 401);
+  });
+
+  void it('falls back to base claims when require_known_client is false', async () => {
+    const upstream = await exchangeContext.signUpstream({ sub: 'user-1', scope: ['ipb:play'] });
+    const response = await exchangeAs('ipb-open-clients', { clientId: 'not-a-client' }, `Bearer ${upstream}`);
+
+    assert.equal(response.status, 200);
+    const claims = await claimsOf(response);
+    assert.equal(claims.tier, 'public');
+  });
+
+  // client_claim is the difference between the caller choosing its own claim set and the
+  // upstream token authorizing which sets that caller may choose from.
+  void it('accepts a client the token corroborates via client_claim', async () => {
+    const upstream = await exchangeContext.signUpstream({
+      sub: 'user-1',
+      client_ids: ['kiosk-a1b2', 'other'],
+    });
+    const response = await exchangeAs('ipb-bound-clients', { clientId: 'kiosk-a1b2' }, `Bearer ${upstream}`);
+
+    assert.equal(response.status, 200);
+    assert.equal((await claimsOf(response)).tier, 'kiosk');
+  });
+
+  void it('refuses a client the token does not corroborate, with 403 not 401', async () => {
+    // The token is perfectly valid - it just does not name this client.
+    const upstream = await exchangeContext.signUpstream({ sub: 'user-1', client_ids: ['someone-else'] });
+    const response = await exchangeAs('ipb-bound-clients', { clientId: 'kiosk-a1b2' }, `Bearer ${upstream}`);
+
+    assert.equal(response.status, 403);
   });
 });
