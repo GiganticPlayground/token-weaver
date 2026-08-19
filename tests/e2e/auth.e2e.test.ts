@@ -1425,6 +1425,16 @@ void describe('Token Weaver e2e — custom login handler', () => {
       'utf8',
     );
 
+    // Returns only the per-login parts; the rest is pinned in config.
+    const mergedHandlerPath = join(customContext.tmpDir, 'merged.mjs');
+    writeFileSync(
+      mergedHandlerPath,
+      `export default async function ({ request }) {
+        return { sub: request.body?.user, tier: 'from-handler' };
+      }`,
+      'utf8',
+    );
+
     const privateKeyPath = join(customContext.tmpDir, 'token-weaver.key.pem');
     writeFileSync(
       privateKeyPath,
@@ -1442,19 +1452,26 @@ void describe('Token Weaver e2e — custom login handler', () => {
       JSON.stringify({
         strategies: [
           {
-            name: 'pictures',
+            name: 'custom-login',
             type: 'custom',
             handler: handlerPath,
             timeout_ms: 300,
-            options: { tier: 'pictures', upstreamName: 'universal-pictures' },
+            options: { tier: 'custom-login', upstreamName: "profile-service" },
             jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
           },
           {
-            name: 'pictures-mapped',
+            name: 'custom-mapped',
             type: 'custom',
             handler: mappedHandlerPath,
             handler_export: 'authenticate',
             claims: { sub: '$.handler.profile.id', email: '$.handler.profile.email' },
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+          {
+            name: 'custom-merged',
+            type: 'custom',
+            handler: mergedHandlerPath,
+            claims: { audience: 'internal', env: 'test-env', tier: 'from-config' },
             jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
           },
         ],
@@ -1501,53 +1518,67 @@ void describe('Token Weaver e2e — custom login handler', () => {
   };
 
   void it('mints from the claims the handler returns, with its configured options', async () => {
-    const response = await login('pictures', { user: 'pictures-user-1' });
+    const response = await login('custom-login', { user: 'custom-user-1' });
     assert.equal(response.status, 200);
 
     const claims = await claimsOfCustom(response);
-    assert.equal(claims.sub, 'pictures-user-1');
+    assert.equal(claims.sub, 'custom-user-1');
     // options let a module stay environment-agnostic
-    assert.equal(claims.tier, 'pictures');
-    assert.equal(claims.upstream, 'universal-pictures');
+    assert.equal(claims.tier, 'custom-login');
+    assert.equal(claims.upstream, 'profile-service');
     // still OUR token
     assert.equal(claims.iss, 'token-weaver');
   });
 
   void it('accepts a handler that returns { claims }', async () => {
-    const claims = await claimsOfCustom(await login('pictures', { mode: 'wrapped', user: 'u2' }));
+    const claims = await claimsOfCustom(await login('custom-login', { mode: 'wrapped', user: 'u2' }));
     assert.equal(claims.sub, 'u2');
     assert.equal(claims.shape, 'wrapped');
   });
 
-  void it('reshapes the handler result when a claims mapping is configured', async () => {
-    const claims = await claimsOfCustom(await login('pictures-mapped', { user: 'u3' }));
+  void it('derives claims in config from the handler result at $.handler', async () => {
+    const claims = await claimsOfCustom(await login('custom-mapped', { user: 'u3' }));
     assert.equal(claims.sub, 'u3');
     assert.equal(claims.email, 'x@y.z');
-    // the raw handler shape is NOT minted when a mapping decides the claims
-    assert.equal(claims.profile, undefined);
+    // The handler's own shape is ALSO layered in - config claims are a base, not a replacement.
+    // A handler that does not want its raw shape minted should return the final shape itself.
+    assert.deepEqual(claims.profile, { id: 'u3', email: 'x@y.z' });
+  });
+
+  // Claims can come from the config, the handler, or both.
+  void it('merges config claims with handler claims, handler winning a conflict', async () => {
+    const claims = await claimsOfCustom(await login('custom-merged', { user: 'u4' }));
+
+    // from config only
+    assert.equal(claims.audience, 'internal');
+    assert.equal(claims.env, 'test-env');
+    // from the handler only
+    assert.equal(claims.sub, 'u4');
+    // set by BOTH - the handler's value wins
+    assert.equal(claims.tier, 'from-handler');
   });
 
   void it('treats a null return as a rejected login', async () => {
-    assert.equal((await login('pictures', { mode: 'reject' })).status, 401);
+    assert.equal((await login('custom-login', { mode: 'reject' })).status, 401);
   });
 
   void it('lets the handler choose a status by throwing with one', async () => {
-    assert.equal((await login('pictures', { mode: 'forbidden' })).status, 403);
+    assert.equal((await login('custom-login', { mode: 'forbidden' })).status, 403);
   });
 
   // A bug in someone's handler must not be reported to callers as bad credentials.
   void it('reports an unexpected throw as 500, not 401', async () => {
-    assert.equal((await login('pictures', { mode: 'boom' })).status, 500);
+    assert.equal((await login('custom-login', { mode: 'boom' })).status, 500);
   });
 
   void it('reports a non-object return as 500', async () => {
-    assert.equal((await login('pictures', { mode: 'notobject' })).status, 500);
+    assert.equal((await login('custom-login', { mode: 'notobject' })).status, 500);
   });
 
   // 503, not 504: the shared error middleware passes 4xx and 503 through and collapses other
   // 5xx to a bare 500, so a 504 would reach the caller as an opaque internal error.
   void it('times out a handler that hangs', async () => {
-    const response = await login('pictures', { mode: 'slow' });
+    const response = await login('custom-login', { mode: 'slow' });
     assert.equal(response.status, 503);
     assert.match(((await response.json()) as { message: string }).message, /timed out/);
   });

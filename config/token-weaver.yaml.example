@@ -125,16 +125,20 @@ strategies:
   #   throw anything else           -> 500, logged (never reported as bad credentials)
   #   exceed timeout_ms             -> 503
   # The module is imported at STARTUP, so a bad path or missing export fails the container.
-  # - name: pictures
+  # - name: custom-login
   #   type: custom
   #   handler: /app/custom/custom-login.mjs
   #   # handler_export: authenticate   # default: `default`, then `authenticate`
   #   timeout_ms: 5000
   #   options:                         # passed through, so the module stays environment-agnostic
   #     profileUrl: https://profiles.example.com/lookup
-  #     tier: pictures
-  #   # claims:                        # optional reshaping; handler result is at $.handler
-  #   #   sub: $.handler.profile.id
+  #     tier: standard
+  #   # Optional BASE claims, merged UNDER whatever the handler returns (handler wins a
+  #   # conflict), so the handler need only supply the per-login parts. A plain string is a
+  #   # literal; `$…` is a path into $.request.* or the handler's result at $.handler.
+  #   claims:
+  #     audience: internal
+  #     # sub: $.handler.profile.id
   #   jwt:
   #     algorithm: RS256
   #     issuer: token-weaver

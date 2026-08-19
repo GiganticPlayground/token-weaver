@@ -116,16 +116,17 @@ module you bind into the container decides the outcome; Token Weaver still signs
 
 ```yaml
 strategies:
-  - name: pictures
+  - name: custom-login
     type: custom
     handler: /app/custom/custom-login.mjs   # loaded at STARTUP
     # handler_export: authenticate          # default: `default`, falling back to `authenticate`
     timeout_ms: 5000                        # default 5000
     options:                                # handed to the handler, so the module stays env-agnostic
       profileUrl: https://profiles.example.com/lookup
-      tier: pictures
-    # claims:                               # optional: reshape the result, with it at $.handler
-    #   sub: $.handler.profile.id
+      tier: standard
+    claims:                                 # optional BASE claims, merged under the handler's
+      audience: internal                    # plain strings are literals; `$…` is a path
+      # sub: $.handler.profile.id           # $.handler is the handler's returned object
     jwt:
       algorithm: RS256
       issuer: token-weaver
@@ -147,6 +148,32 @@ A thrown bug is deliberately **not** a 401: a broken handler must not be reporte
 bad credentials. The timeout is 503 rather than 504 because the shared error middleware passes 4xx
 and 503 through and collapses other 5xx to a bare 500.
 
+#### Claims from the config, the handler, or both
+
+The handler does **not** have to produce every claim. `claims` in the config is a **base**, and
+what the handler returns is layered over it **per top-level claim** — so a deployment can pin
+claims in config while the handler supplies only the per-login parts:
+
+```yaml
+    claims:
+      audience: internal             # plain strings are literals
+      tier: standard
+      env: $.request.headers.x-env   # `$…` is a path: $.request.* or $.handler.*
+```
+
+```js
+export default async ({ request }) => ({ sub: await resolveId(request), tier: 'premium' });
+// minted: audience=internal, env=…, sub=…, tier=premium   (handler wins the tier conflict)
+```
+
+The handler wins a conflict — both are deployment code, and the value closer to the request is the
+useful one. To keep a claim under config's control, don't return it from the handler.
+
+One wrinkle: `$.handler` lets config derive claims from the handler's result (e.g.
+`sub: $.handler.profile.id`), but the handler's own keys are still layered in, so `profile` would
+be minted too. When that matters, return the final shape from the handler — it's code, so shaping
+there is the natural place.
+
 Handlers receive `{ request, options, logger, httpRequest, HttpError }`, where `request` is shaped
 exactly as the `$.request.*` mapping expressions see it. ESM and CommonJS modules both load.
 
@@ -157,7 +184,7 @@ import `logra` (or `jose`, `yaml`, `zod`, ...) directly to make its own named lo
 ```js
 import { createLogger, LOG_TYPES } from 'logra';
 
-const log = createLogger('pictures-login', { style: LOG_TYPES.PRETTY });
+const log = createLogger('custom-login', { style: LOG_TYPES.PRETTY });
 
 export default async function authenticate({ request }) {
   log.info('resolving profile', { user: request.body?.username });

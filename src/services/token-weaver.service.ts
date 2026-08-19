@@ -519,8 +519,7 @@ export class TokenWeaverService {
         // module. Outside it, the failure is a bare "Cannot find package", which does not point
         // at the actual problem.
         const hint = /Cannot find package/.test(message)
-          ? ' - a handler that imports Token Weaver dependencies must be mounted under the app' +
-            ' directory (e.g. /app/custom/), since node resolves node_modules from the module'
+          ? ` - a handler that imports Token Weaver dependencies must be mounted under the app directory (e.g. /app/custom/), since node resolves node_modules from the module`
           : '';
         throw new Error(
           `Strategy ${strategy.name}: could not load handler '${strategy.handler}': ${message}${hint}`,
@@ -533,9 +532,9 @@ export class TokenWeaverService {
       const candidate = exportName ? module[exportName] : (module.default ?? module.authenticate);
 
       if (typeof candidate !== 'function') {
+        const expected = exportName ? `named '${exportName}'` : `as 'default' or 'authenticate'`;
         throw new Error(
-          `Strategy ${strategy.name}: handler '${strategy.handler}' does not export a function` +
-            (exportName ? ` named '${exportName}'` : " as 'default' or 'authenticate'"),
+          `Strategy ${strategy.name}: handler '${strategy.handler}' does not export a function ${expected}`,
         );
       }
 
@@ -640,12 +639,20 @@ export class TokenWeaverService {
     // Tolerate `{ claims }` as well as a bare claims object - both read naturally in a handler.
     const returned = (isPlainObject(result.claims) ? result.claims : result);
 
-    // With a `claims` mapping configured, the handler's result is the SOURCE at $.handler and the
-    // config decides the shape; without one, what the handler returned is what gets minted.
+    // Claims may come from the config, the handler, or both. The config's `claims` are the BASE -
+    // statics and anything derived from $.request.* or the handler's result at $.handler - and what
+    // the handler returned is layered over them PER TOP-LEVEL CLAIM. So a deployment can pin
+    // claims in config while the handler supplies only the per-login parts, and the handler wins
+    // on a conflict (both are deployment code; the closer-to-the-request value is the useful one).
+    //
+    // Reshaping note: with a mapping like `sub: $.handler.profile.id`, the handler's own
+    // `profile` key is still layered in. Return the final shape from the handler when that
+    // matters - it is code, so shaping there is the natural place.
     const mappingContext = { ...(requestContext as unknown as Record<string, unknown>), handler: returned };
-    const claims = strategy.claims
+    const baseClaims = strategy.claims
       ? (mapValue(strategy.claims, mappingContext) as Record<string, unknown>)
-      : returned;
+      : {};
+    const claims = { ...baseClaims, ...returned };
 
     return this.issueToken(strategy, claims, mappingContext);
   }

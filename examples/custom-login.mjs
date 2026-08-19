@@ -4,17 +4,18 @@
  * Bound into a deployment with:
  *
  *   strategies:
- *     - name: pictures
+ *     - name: custom-login
  *       type: custom
  *       handler: /app/custom/custom-login.mjs
  *       timeout_ms: 5000
  *       options:
  *         profileUrl: https://profiles.example.com/lookup
- *         tier: pictures
+ *         tier: standard
  *       jwt: { algorithm: RS256, issuer: token-weaver, ttl: 3600 }
  *
  * Contract:
- *   return claims (or { claims })  -> minted into the token by Token Weaver
+ *   return claims (or { claims })  -> layered over any `claims` set in the strategy config
+ *                                     (the handler wins a conflict), then minted
  *   return null / undefined        -> 401
  *   throw with a numeric .status   -> that status (use the injected HttpError)
  *   throw anything else            -> 500, logged; never reported as bad credentials
