@@ -116,3 +116,27 @@ strategies:
   #     algorithm: RS256
   #     issuer: token-weaver
   #     ttl: 600
+
+  # Custom login: an operator-supplied module decides the outcome (see examples/custom-login.mjs).
+  # Token Weaver still signs the token, so jwt/encrypted_claims behave as usual.
+  #   return claims (or { claims }) -> minted
+  #   return null                   -> 401
+  #   throw with numeric .status    -> that status (use the injected HttpError)
+  #   throw anything else           -> 500, logged (never reported as bad credentials)
+  #   exceed timeout_ms             -> 503
+  # The module is imported at STARTUP, so a bad path or missing export fails the container.
+  # - name: pictures
+  #   type: custom
+  #   handler: /app/custom/custom-login.mjs
+  #   # handler_export: authenticate   # default: `default`, then `authenticate`
+  #   timeout_ms: 5000
+  #   options:                         # passed through, so the module stays environment-agnostic
+  #     profileUrl: https://profiles.example.com/lookup
+  #     tier: pictures
+  #   # claims:                        # optional reshaping; handler result is at $.handler
+  #   #   sub: $.handler.profile.id
+  #   jwt:
+  #     algorithm: RS256
+  #     issuer: token-weaver
+  #     ttl: 3600
+

@@ -1,3 +1,6 @@
+import { clearTimeout, setTimeout } from 'node:timers';
+import { pathToFileURL } from 'node:url';
+
 import type { Request } from 'express';
 
 import { JwtService } from './jwt.service';
@@ -5,6 +8,7 @@ import { compileAuth, extractBearerToken, type CompiledAuth } from '../auth/auth
 import { encryptClaims, parseEncryptionKey } from '../auth/encrypted-claims';
 import { config } from '../config/index';
 import type {
+  CustomStrategyConfig,
   DelegatedStrategyConfig,
   DirectCredential,
   ErrorMappingConfig,
@@ -14,8 +18,8 @@ import type {
   TokenWeaverConfig,
 } from '../config/token-weaver.config';
 import { HttpError, UpstreamUnavailableError } from '../utils/http-error';
-import { evaluateCondition, resolvePath } from '../utils/path-expression';
 import { httpRequest, logger } from '../utils/index';
+import { evaluateCondition, resolvePath } from '../utils/path-expression';
 
 export interface AuthSuccessPayload {
   token: string;
@@ -36,6 +40,25 @@ type RequestContext = {
 };
 
 type UpstreamContext = Record<string, unknown>;
+
+/**
+ * What a custom login module receives. Deliberately small and stable: the request as the mapping
+ * expressions see it, the strategy's own `options`, and the few utilities a login handler
+ * actually needs. A module mounted under the app directory can also import Token Weaver's own
+ * dependencies (jose, yaml, zod...) directly, since node resolves from there.
+ */
+export interface CustomLoginContext {
+  request: RequestContext['request'];
+  options: Record<string, unknown>;
+  logger: typeof logger;
+  httpRequest: typeof httpRequest;
+  HttpError: typeof HttpError;
+}
+
+/** A custom login module: claims to mint, or null/undefined to reject with 401. */
+export type CustomLoginHandler = (
+  context: CustomLoginContext,
+) => Promise<Record<string, unknown> | null | undefined> | Record<string, unknown> | null | undefined;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -191,6 +214,18 @@ export class TokenWeaverService {
    * the JWKS on every exchange.
    */
   private readonly jwtVerifiersByStrategy: ReadonlyMap<string, CompiledAuth>;
+  /**
+   * Custom login modules, keyed by strategy name.
+   *
+   * Populated per instance, NOT once globally: express-openapi-validator's `operationHandlers`
+   * loads the controllers through its own module graph, so the object serving requests is a
+   * different TokenWeaverService from the one bootstrap holds. loadCustomHandlers() therefore
+   * validates at startup (so a broken handler fails the container) while the serving instance
+   * resolves its own copy on first use, cached by the in-flight promise so concurrent logins
+   * import the module once.
+   */
+  private readonly customHandlersByStrategy = new Map<string, CustomLoginHandler>();
+  private readonly customHandlerLoads = new Map<string, Promise<CustomLoginHandler>>();
 
   constructor(private readonly gatewayConfig: TokenWeaverConfig) {
     this.strategiesByName = new Map(
@@ -256,6 +291,10 @@ export class TokenWeaverService {
 
     if (strategy.type === 'jwt') {
       return this.handleJwtStrategy(strategy, req);
+    }
+
+    if (strategy.type === 'custom') {
+      return this.handleCustomStrategy(strategy, req);
     }
 
     return this.handleDelegatedStrategy(strategy, req);
@@ -441,6 +480,167 @@ export class TokenWeaverService {
     }
 
     return mapValue(matched.claims, mappingContext) as Record<string, unknown>;
+  }
+
+  /**
+   * Import every `custom` strategy's module and check it actually exports a callable.
+   *
+   * Called once before the server accepts traffic, so a missing file, a syntax error or a wrong
+   * export name fails the container rather than surfacing as 500s on a login much later.
+   */
+  async loadCustomHandlers(): Promise<void> {
+    for (const strategy of this.gatewayConfig.strategies) {
+      if (strategy.type === 'custom') {
+        await this.resolveCustomHandler(strategy);
+      }
+    }
+  }
+
+  /** Imports a strategy's module once, caching both the result and the in-flight promise. */
+  private async resolveCustomHandler(strategy: CustomStrategyConfig): Promise<CustomLoginHandler> {
+    const cached = this.customHandlersByStrategy.get(strategy.name);
+    if (cached) {
+      return cached;
+    }
+
+    const inFlight = this.customHandlerLoads.get(strategy.name);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const load = (async () => {
+      let module: Record<string, unknown>;
+      try {
+        module = (await import(pathToFileURL(strategy.handler).href)) as Record<string, unknown>;
+      } catch (error) {
+        throw new Error(
+          `Strategy ${strategy.name}: could not load handler '${strategy.handler}': ${
+            (error as Error).message
+          }`,
+        );
+      }
+
+      // A module may export `default` or `authenticate` without configuration; anything else is
+      // named explicitly. CJS interop lands module.exports on `default`.
+      const exportName = strategy.handler_export;
+      const candidate = exportName ? module[exportName] : (module.default ?? module.authenticate);
+
+      if (typeof candidate !== 'function') {
+        throw new Error(
+          `Strategy ${strategy.name}: handler '${strategy.handler}' does not export a function` +
+            (exportName ? ` named '${exportName}'` : " as 'default' or 'authenticate'"),
+        );
+      }
+
+      const handler = candidate as CustomLoginHandler;
+      this.customHandlersByStrategy.set(strategy.name, handler);
+      logger.info('custom login handler loaded', {
+        strategy: strategy.name,
+        handler: strategy.handler,
+      });
+      return handler;
+    })();
+
+    this.customHandlerLoads.set(strategy.name, load);
+    try {
+      return await load;
+    } catch (error) {
+      // Do not cache a failure: a corrected mount should work without a restart.
+      this.customHandlerLoads.delete(strategy.name);
+      throw error;
+    }
+  }
+
+  /**
+   * Run an operator-supplied login module and mint from what it returns.
+   *
+   * The contract is narrow on purpose. Returning claims (or `{ claims }`) succeeds; returning
+   * null/undefined is a 401; throwing something with a numeric `status` uses that status, so a
+   * handler can answer 403 or 429 deliberately. Anything else thrown is a **500**, not a 401 - a
+   * bug in the handler must not be reported to callers as bad credentials, and it is logged with
+   * the strategy name so it is traceable.
+   */
+  private async handleCustomStrategy(
+    strategy: CustomStrategyConfig,
+    req: Request,
+  ): Promise<AuthSuccessPayload> {
+    let handler: CustomLoginHandler;
+    try {
+      handler = await this.resolveCustomHandler(strategy);
+    } catch (error) {
+      // Startup already validated this, so reaching here means the module became unloadable
+      // after boot (a remounted or edited file).
+      logger.error('custom login handler could not be loaded', {
+        strategy: strategy.name,
+        err: error,
+      });
+      throw new HttpError(500, 'Custom login handler is unavailable');
+    }
+
+    const requestContext = buildRequestContext(req);
+    let result: Record<string, unknown> | null | undefined;
+    // A login path must not hang on someone else's code. The timer is always cleared, so a fast
+    // handler does not leave one pending for the rest of the budget on every request.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      result = await Promise.race([
+        Promise.resolve(
+          handler({
+            request: requestContext.request,
+            options: strategy.options ?? {},
+            logger,
+            httpRequest,
+            HttpError,
+          }),
+        ),
+        new Promise<never>((_resolve, reject) => {
+          // 503 rather than 504: the shared error middleware passes 4xx and 503 through and
+          // collapses other 5xx to a bare 500, so a 504 here would reach the caller as an
+          // opaque internal error. A timed-out dependency is a fair reading of 503 anyway.
+          timer = setTimeout(
+            () =>
+              reject(
+                new HttpError(503, `Custom handler timed out after ${strategy.timeout_ms}ms`),
+              ),
+            strategy.timeout_ms,
+          );
+        }),
+      ]);
+    } catch (error) {
+      const status = (error as { status?: unknown }).status;
+      if (typeof status === 'number') {
+        throw error;
+      }
+      logger.error('custom login handler threw', { strategy: strategy.name, err: error });
+      throw new HttpError(500, 'Custom login handler failed');
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+
+    if (result === null || result === undefined) {
+      throw new HttpError(401, 'Authentication failed');
+    }
+    if (!isPlainObject(result)) {
+      logger.error('custom login handler returned a non-object', {
+        strategy: strategy.name,
+        returned: typeof result,
+      });
+      throw new HttpError(500, 'Custom login handler returned an invalid result');
+    }
+
+    // Tolerate `{ claims }` as well as a bare claims object - both read naturally in a handler.
+    const returned = (isPlainObject(result.claims) ? result.claims : result);
+
+    // With a `claims` mapping configured, the handler's result is the SOURCE at $.handler and the
+    // config decides the shape; without one, what the handler returned is what gets minted.
+    const mappingContext = { ...(requestContext as unknown as Record<string, unknown>), handler: returned };
+    const claims = strategy.claims
+      ? (mapValue(strategy.claims, mappingContext) as Record<string, unknown>)
+      : returned;
+
+    return this.issueToken(strategy, claims, mappingContext);
   }
 
   private async handleDelegatedStrategy(

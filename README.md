@@ -107,6 +107,56 @@ cares about: **401** when the token cannot be verified (bad signature, wrong iss
 expired) and **403** when it verifies but does not satisfy `requirements`. `encrypted_claims`
 works the same as for other strategies.
 
+### Custom (operator-supplied module)
+
+For login logic too specific to express as `direct` credentials or a `delegated` HTTP call —
+project rules, several upstreams consulted together, a bespoke signature scheme. A JavaScript
+module you bind into the container decides the outcome; Token Weaver still signs the token, so
+`jwt` and `encrypted_claims` work exactly as for any other strategy.
+
+```yaml
+strategies:
+  - name: pictures
+    type: custom
+    handler: /app/custom/custom-login.mjs   # loaded at STARTUP
+    # handler_export: authenticate          # default: `default`, falling back to `authenticate`
+    timeout_ms: 5000                        # default 5000
+    options:                                # handed to the handler, so the module stays env-agnostic
+      profileUrl: https://profiles.example.com/lookup
+      tier: pictures
+    # claims:                               # optional: reshape the result, with it at $.handler
+    #   sub: $.handler.profile.id
+    jwt:
+      algorithm: RS256
+      issuer: token-weaver
+      ttl: 3600
+```
+
+The handler contract — see `examples/custom-login.mjs` for a worked example:
+
+| Handler does | Result |
+|---|---|
+| returns claims, or `{ claims }` | minted into the token |
+| returns `null`/`undefined` | **401** |
+| throws with a numeric `.status` (use the injected `HttpError`) | that status — pick 400, 403, 429... |
+| throws anything else | **500**, logged with the strategy name |
+| returns a non-object | **500**, logged |
+| exceeds `timeout_ms` | **503** |
+
+A thrown bug is deliberately **not** a 401: a broken handler must not be reported to callers as
+bad credentials. The timeout is 503 rather than 504 because the shared error middleware passes 4xx
+and 503 through and collapses other 5xx to a bare 500.
+
+Handlers receive `{ request, options, logger, httpRequest, HttpError }`, where `request` is shaped
+exactly as the `$.request.*` mapping expressions see it. ESM and CommonJS modules both load.
+Mounted anywhere under the app directory, a handler can also import Token Weaver's own
+dependencies (`jose`, `yaml`, `zod`, ...) directly, since node resolves from there.
+
+**This is arbitrary code running in-process with the service's privileges** — deployment code, not
+user input. Whoever can set `handler` can already set the signing key. The module is imported
+during startup, so a missing file, a syntax error or a wrong export name fails the container
+rather than surfacing as 500s on a login later.
+
 ## Endpoints
 
 - `POST /auth/{name}`

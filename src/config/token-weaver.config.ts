@@ -271,10 +271,46 @@ const delegatedStrategySchema = z.object({
   log: logConfigSchema,
 });
 
+/**
+ * Custom login: an operator-supplied JavaScript module decides the outcome.
+ *
+ * For login flows too specific to express as `direct` credentials or a `delegated` HTTP call -
+ * project-specific rules, several upstreams consulted together, bespoke signature schemes. The
+ * module returns the claims to mint; this service still signs the token, so `jwt` and
+ * `encrypted_claims` behave exactly as for any other strategy.
+ *
+ * NOTE this is arbitrary code running in-process with the service's privileges. The handler is
+ * deployment code, not user input: whoever can set `handler` can already set the signing key.
+ */
+const customStrategySchema = z.object({
+  name: z.string().min(1),
+  type: z.literal('custom'),
+  inbound_auth: inboundAuthSchema.optional(),
+  /** Path to the module. Loaded at STARTUP, so a bad path fails the container, not a login. */
+  handler: z.string().min(1),
+  /**
+   * Named export to call. Defaults to `default`, falling back to `authenticate`, so a module can
+   * use either without configuration.
+   */
+  handler_export: z.string().min(1).optional(),
+  /** Budget for the handler. A login path must not hang on someone else's code. */
+  timeout_ms: z.number().int().positive().optional().default(5000),
+  /** Arbitrary configuration handed to the handler, so a module stays environment-agnostic. */
+  options: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * Optional reshaping of what the handler returned, with its result at `$.handler`. Omit it and
+   * the returned object IS the claims.
+   */
+  claims: mappingObjectSchema.optional(),
+  encrypted_claims: encryptedClaimsSchema.optional(),
+  jwt: sharedJwtSchema,
+});
+
 const strategySchema = z.discriminatedUnion('type', [
   directStrategySchema,
   delegatedStrategySchema,
   jwtStrategySchema,
+  customStrategySchema,
 ]);
 
 export const tokenWeaverConfigSchema = z
@@ -314,12 +350,14 @@ export const tokenWeaverConfigSchema = z
         const publicClaimNames =
           strategy.type === 'direct'
             ? strategy.credentials.flatMap((credential) => Object.keys(credential.claims))
-            : strategy.type === 'jwt'
-              ? [
+            : strategy.type === 'custom'
+              ? Object.keys(strategy.claims ?? {})
+              : strategy.type === 'jwt'
+                ? [
                   ...Object.keys(strategy.claims),
-                  ...(strategy.clients ?? []).flatMap((client) => Object.keys(client.claims)),
-                ]
-              : Object.keys(strategy.response_mapping.claims);
+                    ...(strategy.clients ?? []).flatMap((client) => Object.keys(client.claims)),
+                  ]
+                : Object.keys(strategy.response_mapping.claims);
 
         if (publicClaimNames.includes(encryptedClaims.claim)) {
           ctx.addIssue({
@@ -352,6 +390,7 @@ export type StrategyConfig = TokenWeaverConfig['strategies'][number];
 export type DirectStrategyConfig = Extract<StrategyConfig, { type: 'direct' }>;
 export type DelegatedStrategyConfig = Extract<StrategyConfig, { type: 'delegated' }>;
 export type JwtStrategyConfig = Extract<StrategyConfig, { type: 'jwt' }>;
+export type CustomStrategyConfig = Extract<StrategyConfig, { type: 'custom' }>;
 export type DirectCredential = DirectStrategyConfig['credentials'][number];
 export type InboundAuthConfig = NonNullable<StrategyConfig['inbound_auth']>;
 export type JwtConfig = StrategyConfig['jwt'];
