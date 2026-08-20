@@ -56,7 +56,7 @@
     "jose": "^6.2.3",
     "js-yaml": "^4.1.0",
     "logra": "github:GiganticPlayground/logra#semver:^1.0.0",
-    "reqcast": "github:GiganticPlayground/reqcast#semver:^1.2.0",
+    "reqcast": "github:GiganticPlayground/reqcast#semver:^1.3.0",
     "swagger-ui-express": "^5.0.1",
     "yaml": "^2.8.1",
     "zod": "^4.1.12"

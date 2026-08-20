@@ -1,0 +1,30 @@
+# reqcast request analytics, YAML form (JSON is equally valid - reqcast picks by extension).
+# Referenced via REQCAST_CONFIG, or found automatically as ./reqcast.config.yaml.
+enabled: true
+sampleRate: 1
+capture:
+  requestBody: false
+  responseBody: false
+filters:
+  includePaths: ['/auth/**']
+  excludePaths: ['/health', '/.well-known/**', '/api-docs/**']
+format:
+  fields:
+    ts: timestamp
+    requestId: requestId
+    durationMs: durationMs
+    request:
+      method: request.method
+      path: request.path
+      ip: request.ip
+    response:
+      status: response.statusCode
+sinks:
+  - type: log
+    level: info
+    message: request analytics
+  # Keep credentials out of the file - ${VAR} is interpolated at load time.
+  # - type: amqp
+  #   url: ${ANALYTICS_AMQP_URL}
+  #   exchange: analytics
+  #   routingKey: api.{path}
