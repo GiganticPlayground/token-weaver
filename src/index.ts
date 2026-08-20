@@ -13,6 +13,7 @@ import {
   errorHandlerMiddleware,
   requestContextMiddleware,
 } from './middlewares/index';
+import { tokenWeaverService } from './services';
 import { buildAnalytics, logger } from './utils/index';
 import { setupShutdown } from './utils/shutdown';
 
@@ -76,6 +77,10 @@ if (config.RATE_LIMIT_ENABLED) {
 }
 app.use(createOpenApiValidatorMiddleware(apiSpecPath));
 app.use(errorHandlerMiddleware);
+
+// Import any custom login modules BEFORE serving: a missing file, a syntax error or a wrong
+// export name should fail the container, not surface as 500s on a login later.
+await tokenWeaverService.loadCustomHandlers();
 
 const server = app.listen(config.PORT, () => {
   logger.info(`Server is running on port ${config.PORT}`);

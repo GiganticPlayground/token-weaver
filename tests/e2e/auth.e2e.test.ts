@@ -1383,3 +1383,284 @@ void describe('Token Weaver e2e — JWT exchange strategy', () => {
     assert.equal(response.status, 403);
   });
 });
+
+/**
+ * Custom login: an operator-supplied module decides the outcome.
+ *
+ * The contract is what these cases pin down - what a handler returns, how it rejects, what
+ * happens when it throws or hangs - because that contract is what deployments will write against.
+ */
+void describe('Token Weaver e2e — custom login handler', () => {
+  const customContext = {} as TestContext;
+
+  void before(async () => {
+    customContext.tmpDir = mkdtempSync(join(tmpdir(), 'token-weaver-custom-'));
+
+    // A handler exercising every branch of the contract, written the way a deployment would.
+    const handlerPath = join(customContext.tmpDir, 'login.mjs');
+    writeFileSync(
+      handlerPath,
+      `export default async function authenticate({ request, options, HttpError }) {
+        const { mode, user } = request.body ?? {};
+
+        if (mode === 'reject') return null;                       // -> 401
+        if (mode === 'forbidden') throw new HttpError(403, 'nope'); // -> 403, chosen by the handler
+        if (mode === 'boom') throw new Error('handler bug');        // -> 500, NOT 401
+        if (mode === 'slow') await new Promise((r) => setTimeout(r, 5000)); // -> 504
+        if (mode === 'wrapped') return { claims: { sub: user, shape: 'wrapped' } };
+        if (mode === 'notobject') return 'nope';                    // -> 500
+
+        return { sub: user, tier: options.tier, upstream: options.upstreamName };
+      }`,
+      'utf8',
+    );
+
+    // A second handler whose result is reshaped by config rather than returned ready to mint.
+    const mappedHandlerPath = join(customContext.tmpDir, 'mapped.mjs');
+    writeFileSync(
+      mappedHandlerPath,
+      `export async function authenticate({ request }) {
+        return { profile: { id: request.body?.user, email: 'x@y.z' } };
+      }`,
+      'utf8',
+    );
+
+    // Returns only the per-login parts; the rest is pinned in config.
+    const mergedHandlerPath = join(customContext.tmpDir, 'merged.mjs');
+    writeFileSync(
+      mergedHandlerPath,
+      `export default async function ({ request }) {
+        return { sub: request.body?.user, tier: 'from-handler' };
+      }`,
+      'utf8',
+    );
+
+    const privateKeyPath = join(customContext.tmpDir, 'token-weaver.key.pem');
+    writeFileSync(
+      privateKeyPath,
+      generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      }).privateKey,
+      'utf8',
+    );
+
+    const configPath = join(customContext.tmpDir, 'token-weaver.config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        strategies: [
+          {
+            name: 'custom-login',
+            type: 'custom',
+            handler: handlerPath,
+            timeout_ms: 300,
+            options: { tier: 'custom-login', upstreamName: "profile-service" },
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+          {
+            name: 'custom-mapped',
+            type: 'custom',
+            handler: mappedHandlerPath,
+            handler_export: 'authenticate',
+            claims: { sub: '$.handler.profile.id', email: '$.handler.profile.email' },
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+          {
+            name: 'custom-merged',
+            type: 'custom',
+            handler: mergedHandlerPath,
+            claims: { audience: 'internal', env: 'test-env', tier: 'from-config' },
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    customContext.servicePort = await getAvailablePort();
+    customContext.output = [];
+    customContext.serviceProcess = spawn(process.execPath, ['--import=tsx', 'src/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        PORT: String(customContext.servicePort),
+        TOKEN_WEAVER_CONFIG_PATH: configPath,
+        TOKEN_WEAVER_PRIVATE_KEY_PATH: privateKeyPath,
+        TOKEN_WEAVER_KID: 'token-weaver-custom',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    customContext.serviceProcess.stdout.on('data', (chunk) => customContext.output.push(String(chunk)));
+    customContext.serviceProcess.stderr.on('data', (chunk) => customContext.output.push(String(chunk)));
+
+    await waitForServiceReady(customContext.servicePort, customContext.output);
+  });
+
+  void after(async () => {
+    customContext.serviceProcess.kill('SIGTERM');
+    await new Promise((resolve) => customContext.serviceProcess.once('exit', resolve));
+    rmSync(customContext.tmpDir, { recursive: true, force: true });
+  });
+
+  const login = async (strategy: string, body: Record<string, unknown>) =>
+    globalThis.fetch(`http://127.0.0.1:${customContext.servicePort}/auth/${strategy}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  const claimsOfCustom = async (response: globalThis.Response) => {
+    const body = (await response.json()) as { token: string };
+    return decodeJwtPart(body.token.split('.')[1]!);
+  };
+
+  void it('mints from the claims the handler returns, with its configured options', async () => {
+    const response = await login('custom-login', { user: 'custom-user-1' });
+    assert.equal(response.status, 200);
+
+    const claims = await claimsOfCustom(response);
+    assert.equal(claims.sub, 'custom-user-1');
+    // options let a module stay environment-agnostic
+    assert.equal(claims.tier, 'custom-login');
+    assert.equal(claims.upstream, 'profile-service');
+    // still OUR token
+    assert.equal(claims.iss, 'token-weaver');
+  });
+
+  void it('accepts a handler that returns { claims }', async () => {
+    const claims = await claimsOfCustom(await login('custom-login', { mode: 'wrapped', user: 'u2' }));
+    assert.equal(claims.sub, 'u2');
+    assert.equal(claims.shape, 'wrapped');
+  });
+
+  void it('derives claims in config from the handler result at $.handler', async () => {
+    const claims = await claimsOfCustom(await login('custom-mapped', { user: 'u3' }));
+    assert.equal(claims.sub, 'u3');
+    assert.equal(claims.email, 'x@y.z');
+    // The handler's own shape is ALSO layered in - config claims are a base, not a replacement.
+    // A handler that does not want its raw shape minted should return the final shape itself.
+    assert.deepEqual(claims.profile, { id: 'u3', email: 'x@y.z' });
+  });
+
+  // Claims can come from the config, the handler, or both.
+  void it('merges config claims with handler claims, handler winning a conflict', async () => {
+    const claims = await claimsOfCustom(await login('custom-merged', { user: 'u4' }));
+
+    // from config only
+    assert.equal(claims.audience, 'internal');
+    assert.equal(claims.env, 'test-env');
+    // from the handler only
+    assert.equal(claims.sub, 'u4');
+    // set by BOTH - the handler's value wins
+    assert.equal(claims.tier, 'from-handler');
+  });
+
+  void it('treats a null return as a rejected login', async () => {
+    assert.equal((await login('custom-login', { mode: 'reject' })).status, 401);
+  });
+
+  void it('lets the handler choose a status by throwing with one', async () => {
+    assert.equal((await login('custom-login', { mode: 'forbidden' })).status, 403);
+  });
+
+  // A bug in someone's handler must not be reported to callers as bad credentials.
+  void it('reports an unexpected throw as 500, not 401', async () => {
+    assert.equal((await login('custom-login', { mode: 'boom' })).status, 500);
+  });
+
+  void it('reports a non-object return as 500', async () => {
+    assert.equal((await login('custom-login', { mode: 'notobject' })).status, 500);
+  });
+
+  // 503, not 504: the shared error middleware passes 4xx and 503 through and collapses other
+  // 5xx to a bare 500, so a 504 would reach the caller as an opaque internal error.
+  void it('times out a handler that hangs', async () => {
+    const response = await login('custom-login', { mode: 'slow' });
+    assert.equal(response.status, 503);
+    assert.match(((await response.json()) as { message: string }).message, /timed out/);
+  });
+
+  void it('logged the loaded handler at startup', () => {
+    assert.match(customContext.output.join(''), /custom login handler loaded/);
+  });
+});
+
+/**
+ * A broken handler must fail the CONTAINER, not a login. Config referencing a module that cannot
+ * be imported, or that exports no callable, should never reach a serving state.
+ */
+void describe('Token Weaver e2e — custom handler startup validation', () => {
+  const startFailing = async (handlerBody: string | null): Promise<string> => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'token-weaver-custom-bad-'));
+    const handlerPath = join(tmpDir, 'handler.mjs');
+    if (handlerBody !== null) {
+      writeFileSync(handlerPath, handlerBody, 'utf8');
+    }
+
+    const privateKeyPath = join(tmpDir, 'key.pem');
+    writeFileSync(
+      privateKeyPath,
+      generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      }).privateKey,
+      'utf8',
+    );
+
+    const configPath = join(tmpDir, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        strategies: [
+          {
+            name: 'broken',
+            type: 'custom',
+            handler: handlerPath,
+            jwt: { algorithm: 'RS256', issuer: 'token-weaver', ttl: 600 },
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const port = await getAvailablePort();
+    const child = spawn(process.execPath, ['--import=tsx', 'src/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        PORT: String(port),
+        TOKEN_WEAVER_CONFIG_PATH: configPath,
+        TOKEN_WEAVER_PRIVATE_KEY_PATH: privateKeyPath,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const output: string[] = [];
+    child.stdout.on('data', (c) => output.push(String(c)));
+    child.stderr.on('data', (c) => output.push(String(c)));
+    await new Promise((resolve) => child.once('exit', resolve));
+    rmSync(tmpDir, { recursive: true, force: true });
+    return output.join('');
+  };
+
+  void it('exits when the handler file does not exist', async () => {
+    assert.match(await startFailing(null), /could not load handler/);
+  });
+
+  void it('exits when the module exports no callable', async () => {
+    assert.match(await startFailing('export const something = 42;'), /does not export a function/);
+  });
+
+  // A handler outside the app directory cannot resolve Token Weaver's dependencies, and the bare
+  // "Cannot find package" that node reports does not point at the actual problem.
+  void it('explains that an importing handler must be mounted under the app directory', async () => {
+    const output = await startFailing("import { createLogger } from 'logra';\nexport default () => ({ sub: createLogger });");
+    assert.match(output, /Cannot find package 'logra'/);
+    assert.match(output, /must be mounted under the app directory/);
+  });
+});

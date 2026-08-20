@@ -107,6 +107,101 @@ cares about: **401** when the token cannot be verified (bad signature, wrong iss
 expired) and **403** when it verifies but does not satisfy `requirements`. `encrypted_claims`
 works the same as for other strategies.
 
+### Custom (operator-supplied module)
+
+For login logic too specific to express as `direct` credentials or a `delegated` HTTP call —
+project rules, several upstreams consulted together, a bespoke signature scheme. A JavaScript
+module you bind into the container decides the outcome; Token Weaver still signs the token, so
+`jwt` and `encrypted_claims` work exactly as for any other strategy.
+
+```yaml
+strategies:
+  - name: custom-login
+    type: custom
+    handler: /app/custom/custom-login.mjs   # loaded at STARTUP
+    # handler_export: authenticate          # default: `default`, falling back to `authenticate`
+    timeout_ms: 5000                        # default 5000
+    options:                                # handed to the handler, so the module stays env-agnostic
+      profileUrl: https://profiles.example.com/lookup
+      tier: standard
+    claims:                                 # optional BASE claims, merged under the handler's
+      audience: internal                    # plain strings are literals; `$…` is a path
+      # sub: $.handler.profile.id           # $.handler is the handler's returned object
+    jwt:
+      algorithm: RS256
+      issuer: token-weaver
+      ttl: 3600
+```
+
+The handler contract — see `examples/custom-login.mjs` for a worked example:
+
+| Handler does | Result |
+|---|---|
+| returns claims, or `{ claims }` | minted into the token |
+| returns `null`/`undefined` | **401** |
+| throws with a numeric `.status` (use the injected `HttpError`) | that status — pick 400, 403, 429... |
+| throws anything else | **500**, logged with the strategy name |
+| returns a non-object | **500**, logged |
+| exceeds `timeout_ms` | **503** |
+
+A thrown bug is deliberately **not** a 401: a broken handler must not be reported to callers as
+bad credentials. The timeout is 503 rather than 504 because the shared error middleware passes 4xx
+and 503 through and collapses other 5xx to a bare 500.
+
+#### Claims from the config, the handler, or both
+
+The handler does **not** have to produce every claim. `claims` in the config is a **base**, and
+what the handler returns is layered over it **per top-level claim** — so a deployment can pin
+claims in config while the handler supplies only the per-login parts:
+
+```yaml
+    claims:
+      audience: internal             # plain strings are literals
+      tier: standard
+      env: $.request.headers.x-env   # `$…` is a path: $.request.* or $.handler.*
+```
+
+```js
+export default async ({ request }) => ({ sub: await resolveId(request), tier: 'premium' });
+// minted: audience=internal, env=…, sub=…, tier=premium   (handler wins the tier conflict)
+```
+
+The handler wins a conflict — both are deployment code, and the value closer to the request is the
+useful one. To keep a claim under config's control, don't return it from the handler.
+
+One wrinkle: `$.handler` lets config derive claims from the handler's result (e.g.
+`sub: $.handler.profile.id`), but the handler's own keys are still layered in, so `profile` would
+be minted too. When that matters, return the final shape from the handler — it's code, so shaping
+there is the natural place.
+
+Handlers receive `{ request, options, logger, httpRequest, HttpError }`, where `request` is shaped
+exactly as the `$.request.*` mapping expressions see it. ESM and CommonJS modules both load.
+
+The injected `logger` is Token Weaver's own [logra](https://github.com/GiganticPlayground/logra)
+logger, so app logs need no imports and inherit the service's level and format. A handler can also
+import `logra` (or `jose`, `yaml`, `zod`, ...) directly to make its own named logger:
+
+```js
+import { createLogger, LOG_TYPES } from 'logra';
+
+const log = createLogger('custom-login', { style: LOG_TYPES.PRETTY });
+
+export default async function authenticate({ request }) {
+  log.info('resolving profile', { user: request.body?.username });
+  ...
+}
+```
+
+**Imports only resolve when the handler is mounted under the app directory** (e.g.
+`/app/custom/…`), because node resolves `node_modules` by walking up from the module. A handler
+outside it that imports anything fails at startup with `Cannot find package 'logra'` — the error
+says so, and the container exits rather than serving.
+
+**This is arbitrary code running in-process with the service's privileges** — deployment code, not
+user input. Whoever can set `handler` can already set the signing key. The module is imported
+during startup, so a missing file, a syntax error or a wrong export name fails the container
+rather than surfacing as 500s on a login later.
+
 ## Endpoints
 
 - `POST /auth/{name}`
@@ -347,7 +442,7 @@ Security notes:
 | `TOKEN_WEAVER_KID` | `token-weaver-key` | JWKS key ID included in signed JWT headers and JWKS output |
 | `API_DOCS_ENABLED` | `true` | Mounts the Swagger UI at `/api-docs` and the raw spec at `/api-docs.yaml`; set to `false` to disable both in production |
 | `SHUTDOWN_TIMEOUT_MS` | `30000` | Maximum time in milliseconds to wait for in-flight requests to complete on SIGTERM/SIGINT before force-exiting |
-| `REQCAST_CONFIG` | — | Path to a [reqcast](https://github.com/GiganticPlayground/reqcast) request-analytics config; falls back to `./reqcast.config.json` when present, otherwise analytics stay disabled (see `examples/reqcast.config.json`) |
+| `REQCAST_CONFIG` | — | Path to a [reqcast](https://github.com/GiganticPlayground/reqcast) request-analytics config, YAML or JSON; falls back to the first of `./reqcast.config.json`, `./reqcast.config.yaml`, `./reqcast.config.yml` that exists, otherwise analytics stay disabled (see `examples/reqcast.config.json`) |
 
 ## Development
 
