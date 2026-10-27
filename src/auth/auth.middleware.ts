@@ -8,7 +8,8 @@ import type { AuthMiddlewareOptions, MultiStrategyAuthOptions } from './types';
  * Create a configurable JWT-verification Express middleware.
  *
  * A thin wrapper over the framework-agnostic core (`auth.core.ts`): it extracts the
- * Authorization header and request path from the Express request, delegates to the compiled
+ * request headers (each strategy reads its own `header`, default Authorization) and the
+ * request path from the Express request, delegates to the compiled
  * authenticator, attaches the decoded payload to `req.jwtPayload`, and awaits `onVerified`
  * (if provided) once for the winning strategy.
  *
@@ -33,6 +34,7 @@ export function createAuthMiddleware(
   const handle = async (req: Request): Promise<void> => {
     const payload: JWTPayload = await authenticate({
       authorizationHeader: req.headers.authorization,
+      headers: req.headers,
       path: `${req.baseUrl}${req.path}`,
     });
 

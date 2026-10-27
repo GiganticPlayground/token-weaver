@@ -495,7 +495,8 @@ Three modes (a single instance uses one; combine several via `strategies` — se
 | `static` | constant-time compare of the bearer to a fixed token | `staticToken` |
 
 Behavior:
-- Reads `Authorization: Bearer <token>`; missing/malformed → `401`.
+- Reads `Authorization: Bearer <token>` by default; missing/malformed → `401`. A strategy can
+  read another header instead — see [Custom credential header](#custom-credential-header).
 - On success attaches the decoded payload to `req.jwtPayload` and awaits the optional
   `onVerified(payload, req)` hook, then calls `next()`. For `static` mode the payload is `{}`.
 - On any failure (expired, bad signature, wrong issuer/audience, missing token) it calls
@@ -525,6 +526,35 @@ createAuthMiddleware({
   onVerified: (payload, req) => { req.auth = { userId: payload.sub }; },
 });
 ```
+
+### Custom credential header
+
+Every strategy reads its token from `Authorization: Bearer <token>` unless it says otherwise:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `header` | `authorization` | Header carrying the credential (case-insensitive) |
+| `scheme` | `bearer` | `bearer` expects `Bearer <token>`; `none` takes the whole header value as the token |
+
+This is mostly for `static` keys a service already sends in its own header, but it works for
+every mode. In a `strategies` list each strategy reads its own header, so a service key and client
+JWTs can share one middleware:
+
+```ts
+createAuthMiddleware({
+  strategies: [
+    { mode: 'static', staticToken: process.env.SERVICE_KEY,
+      header: 'X-Service-Key', scheme: 'none' },          // X-Service-Key: <key>
+    { mode: 'jwt-jwks', issuer: 'token-weaver',
+      jwksUri: process.env.JWKS_URL },                     // Authorization: Bearer <jwt>
+  ],
+});
+```
+
+A missing header is a `401` (`Missing x-service-key header`), as is an empty value or, with
+`bearer`, a value without the `Bearer` prefix. A header sent more than once counts as missing.
+Callers of the core API (`compileAuth` / `authenticate`) pass the request headers as
+`headers` (lower-case names) alongside `authorizationHeader`.
 
 ### Optional authorization (requirements & path allow/deny)
 
@@ -654,6 +684,8 @@ app.use('/admin', createAuthMiddlewareFromEnv({
 | `AUTH_JWKS_URI` | `jwksUri` | `jwt-jwks` mode |
 | `AUTH_SECRET` | `secret` | `jwt-hs256` mode |
 | `AUTH_STATIC_TOKEN` | `staticToken` | `static` mode |
+| `AUTH_HEADER` | `header` | optional; default `authorization` |
+| `AUTH_SCHEME` | `scheme` | optional; `bearer` (default) \| `none` |
 | `AUTH_PATH_PREFIX` | `paths.pathPrefix` | optional |
 | `AUTH_WHITELIST_CLAIM` | `paths.whitelistClaim` | optional; enables `paths` |
 | `AUTH_BLACKLIST_CLAIM` | `paths.blacklistClaim` | optional; enables `paths` |
@@ -687,6 +719,12 @@ AUTH_SECRET=${JWT_SHARED_SECRET}
 # Static bearer token — service-to-service without a JWT issuer
 AUTH_MODE=static
 AUTH_STATIC_TOKEN=${SERVICE_TOKEN}
+
+# Static key in its own header — X-Service-Key: <key>, no Bearer prefix
+AUTH_MODE=static
+AUTH_STATIC_TOKEN=${SERVICE_TOKEN}
+AUTH_HEADER=X-Service-Key
+AUTH_SCHEME=none
 ```
 
 ### Library install notes

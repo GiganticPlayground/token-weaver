@@ -34,6 +34,7 @@ export type {
   AuthMode,
   AuthPaths,
   AuthRequirement,
+  AuthScheme,
   AuthStrategyOptions,
   MultiStrategyAuthOptions,
 } from './types';

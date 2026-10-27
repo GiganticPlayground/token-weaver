@@ -156,6 +156,7 @@ function readRequirements(read: EnvReader, prefix: string): AuthRequirement[] {
  *
  * Reads (with the configurable `prefix`, default `AUTH_`):
  * `MODE`, `ISSUER`, `AUDIENCE`, `JWKS_URI`, `SECRET`, `STATIC_TOKEN`,
+ * `HEADER`/`SCHEME` (where the credential is read from; default `Authorization: Bearer`),
  * `PATH_PREFIX`, `WHITELIST_CLAIM`, `BLACKLIST_CLAIM`, `WHITELIST`/`BLACKLIST`
  * (comma-separated inline path patterns, usable in `static` mode),
  * `REQUIREMENTS` (a JSON array, e.g. `[{"type":"scope","value":"svc:read"}]`), and
@@ -194,6 +195,17 @@ export function createAuthMiddlewareFromEnv(opts: FromEnvOptions = {}): RequestH
   if (secret !== undefined) options.secret = secret;
   const staticToken = read('STATIC_TOKEN');
   if (staticToken !== undefined) options.staticToken = staticToken;
+  const header = read('HEADER');
+  if (header !== undefined) options.header = header;
+  const scheme = read('SCHEME');
+  if (scheme !== undefined) {
+    if (scheme !== 'bearer' && scheme !== 'none') {
+      throw new Error(
+        `createAuthMiddlewareFromEnv: ${prefix}SCHEME must be 'bearer' or 'none' (got ${scheme})`,
+      );
+    }
+    options.scheme = scheme;
+  }
 
   const paths = readPaths(read);
   if (paths !== undefined) options.paths = paths;

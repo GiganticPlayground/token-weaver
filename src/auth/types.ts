@@ -11,6 +11,14 @@ import type { JWTPayload } from 'jose';
 export type AuthMode = 'jwt-jwks' | 'jwt-hs256' | 'static';
 
 /**
+ * How the credential header carries the token.
+ *
+ * - `bearer` — `Bearer <token>` (the default, and what `Authorization` normally holds).
+ * - `none`   — the whole header value is the token, e.g. `X-Service-Key: <key>`.
+ */
+export type AuthScheme = 'bearer' | 'none';
+
+/**
  * Optional authorization requirement checked against the verified JWT payload.
  *
  * - `scope` — the token's `scope` claim (array or space-separated string) must include `value`.
@@ -87,6 +95,17 @@ export interface AuthMiddlewareOptions {
   secret?: string;
   /** Required when `mode === 'static'`. */
   staticToken?: string;
+  /**
+   * Header carrying the credential (case-insensitive). Default `authorization`. Lets a strategy
+   * read, say, a static service key from `X-Service-Key` while another reads a JWT from
+   * `Authorization` in the same middleware.
+   */
+  header?: string;
+  /**
+   * How the header value carries the token. Default `bearer` (`Bearer <token>`); `none` takes
+   * the whole value as the token.
+   */
+  scheme?: AuthScheme;
   /**
    * Optional authorization checks run after a successful verification. Each must pass or the
    * request is rejected with 403. Ignored in `static` mode (no claims to check).
