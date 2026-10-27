@@ -11,6 +11,7 @@ import {
   type AuthMiddlewareOptions,
   type AuthPaths,
   type AuthRequirement,
+  type AuthScheme,
   type AuthStrategyOptions,
   type MultiStrategyAuthOptions,
 } from './types';
@@ -28,6 +29,12 @@ import {
 export interface AuthenticateInput {
   /** Raw Authorization header value (e.g. `"Bearer eyJ..."`). */
   authorizationHeader?: string | undefined;
+  /**
+   * All request headers, keyed by lower-case name (Node's `IncomingHttpHeaders` fits). Needed
+   * only by strategies that read a `header` other than `authorization`; for `authorization`,
+   * `authorizationHeader` wins when both are given.
+   */
+  headers?: Readonly<Record<string, string | string[] | undefined>> | undefined;
   /**
    * Identifier matched against `paths` whitelist/blacklist rules. Any opaque string works — a
    * URL path or a canonical operation/route name. Required when a strategy configures `paths`;
@@ -63,6 +70,56 @@ export function extractBearerToken(authorizationHeader: string | undefined): str
   }
 
   return token;
+}
+
+/** Reads a strategy's token from the request input. Throws AuthError when it is missing. */
+type TokenReader = (input: AuthenticateInput) => string;
+
+const AUTH_SCHEMES: readonly AuthScheme[] = ['bearer', 'none'];
+
+/**
+ * Build the token reader for a strategy's `header` and `scheme`. Validated once, at compile
+ * time: an empty header name or an unknown scheme throws (fail fast).
+ *
+ * The default (`authorization` + `bearer`) behaves exactly as {@link extractBearerToken}, with
+ * the same error messages.
+ */
+function buildTokenReader(options: AuthStrategyOptions): TokenReader {
+  const header = (options.header ?? 'authorization').trim().toLowerCase();
+  const scheme = options.scheme ?? 'bearer';
+  if (header.length === 0) {
+    throw new Error("compileAuth: 'header' must not be empty");
+  }
+  if (!AUTH_SCHEMES.includes(scheme)) {
+    throw new Error(`compileAuth: 'scheme' must be 'bearer' or 'none' (got '${String(scheme)}')`);
+  }
+
+  return (input) => {
+    const raw =
+      header === 'authorization' && input.authorizationHeader !== undefined
+        ? input.authorizationHeader
+        : input.headers?.[header];
+
+    if (header === 'authorization' && scheme === 'bearer') {
+      return extractBearerToken(typeof raw === 'string' ? raw : undefined);
+    }
+    if (typeof raw !== 'string') {
+      // Absent, or repeated (an array) — a credential header must appear exactly once.
+      throw new AuthError(`Missing ${header} header`);
+    }
+    if (scheme === 'none') {
+      const token = raw.trim();
+      if (token.length === 0) {
+        throw new AuthError(`Malformed ${header} header`);
+      }
+      return token;
+    }
+    const [prefix, token] = raw.split(/\s+/, 2);
+    if (prefix?.toLowerCase() !== 'bearer' || !token) {
+      throw new AuthError(`Malformed ${header} header`);
+    }
+    return token;
+  };
 }
 
 function constantTimeEquals(actual: string, expected: string): boolean {
@@ -379,6 +436,7 @@ function buildDecryptor(options: AuthStrategyOptions): ClaimsDecryptor | undefin
  * option combination (programmer error, fail fast).
  */
 function resolveVerifier(options: AuthStrategyOptions): InputVerifier {
+  const readToken = buildTokenReader(options);
   switch (options.mode) {
     case 'jwt-jwks': {
       const { jwksUri, issuer, audience } = options;
@@ -389,7 +447,7 @@ function resolveVerifier(options: AuthStrategyOptions): InputVerifier {
       const verifyOptions = buildVerifyOptions(issuer, audience, 'RS256');
 
       return async (input) => {
-        const token = extractBearerToken(input.authorizationHeader);
+        const token = readToken(input);
         try {
           const { payload } = await jwtVerify(token, jwks, verifyOptions);
           return payload;
@@ -408,7 +466,7 @@ function resolveVerifier(options: AuthStrategyOptions): InputVerifier {
       const verifyOptions = buildVerifyOptions(issuer, audience, 'HS256');
 
       return async (input) => {
-        const token = extractBearerToken(input.authorizationHeader);
+        const token = readToken(input);
         try {
           const { payload } = await jwtVerify(token, key, verifyOptions);
           return payload;
@@ -423,7 +481,7 @@ function resolveVerifier(options: AuthStrategyOptions): InputVerifier {
       if (!staticToken) throw configError('staticToken', 'static');
 
       return async (input) => {
-        const token = extractBearerToken(input.authorizationHeader);
+        const token = readToken(input);
         if (!constantTimeEquals(token, staticToken)) {
           throw new AuthError('Invalid token');
         }
