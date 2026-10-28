@@ -47,9 +47,12 @@ export interface AuthPaths {
   whitelist?: string[];
   /** Inline denied path patterns. A match denies (wins over the whitelist). */
   blacklist?: string[];
-  /** Claim holding allowed path patterns. If present on the token, at least one must match. */
+  /**
+   * Claim holding allowed path patterns. If present on the token, at least one must match.
+   * A dotted name (`routes.whitelist`) reads a nested claim; an exact top-level key wins.
+   */
   whitelistClaim?: string;
-  /** Claim holding denied path patterns. A match denies (wins over the whitelist). */
+  /** Claim holding denied path patterns (dotted names supported). A match denies. */
   blacklistClaim?: string;
 }
 

@@ -302,9 +302,32 @@ function buildPathRegex(patterns: string[]): RegExp {
 }
 
 /**
+ * Read a claim by name. An exact top-level key wins (so a claim literally named `a.b` keeps
+ * working); otherwise a dotted name walks nested objects (`routes.whitelist`). Returns
+ * `undefined` when any segment is missing or not an object.
+ */
+function readClaimPath(payload: JWTPayload, claimName: string): unknown {
+  if (payload[claimName] !== undefined) {
+    return payload[claimName];
+  }
+  if (!claimName.includes('.')) {
+    return undefined;
+  }
+  let current: unknown = payload;
+  for (const segment of claimName.split('.')) {
+    if (current === null || typeof current !== 'object' || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+/**
  * Resolve an effective pattern list from an inline list and/or a claim name. Inline patterns
- * take precedence; otherwise the named claim is read from the payload. Returns `null` when
- * neither source is active (meaning "no list configured" — unrestricted for that side).
+ * take precedence; otherwise the named claim (top-level or dotted path) is read from the
+ * payload. Returns `null` when neither source is active (meaning "no list configured" —
+ * unrestricted for that side).
  */
 function resolvePatternList(
   inline: string[] | undefined,
@@ -314,8 +337,11 @@ function resolvePatternList(
   if (inline !== undefined) {
     return inline;
   }
-  if (claimName !== undefined && payload[claimName] !== undefined) {
-    return toStringArray(payload[claimName]);
+  if (claimName !== undefined) {
+    const value = readClaimPath(payload, claimName);
+    if (value !== undefined) {
+      return toStringArray(value);
+    }
   }
   return null;
 }
