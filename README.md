@@ -565,8 +565,9 @@ claims when it issues the JWT, and the middleware enforces them.**
 
 `requirements` are claim-based, so they are skipped in `static` mode. `paths` supports two pattern
 sources: **claim-based** (`whitelistClaim`/`blacklistClaim`, JWT modes only) and **inline**
-(`whitelist`/`blacklist` arrays, declared in config). Inline patterns need no claims, so they are
-the way to scope a **`static`** token to specific paths:
+(`whitelist`/`blacklist` arrays, declared in config). A claim name may be a dotted path such as
+`routes.whitelist` to read a nested claim; an exact top-level key of the same name wins. Inline
+patterns need no claims, so they are the way to scope a **`static`** token to specific paths:
 
 ```ts
 createAuthMiddleware({

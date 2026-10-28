@@ -113,6 +113,54 @@ void describe('authenticate (framework-agnostic)', () => {
     );
   });
 
+  void it('reads nested claim-carried path lists via dotted claim names', async () => {
+    const token = await signHs256({ routes: { whitelist: ['svc/*'], blacklist: ['svc/admin'] } });
+    const options = {
+      mode: 'jwt-hs256' as const,
+      secret: SECRET,
+      issuer: ISSUER,
+      paths: { whitelistClaim: 'routes.whitelist', blacklistClaim: 'routes.blacklist' },
+    };
+
+    assert.ok(await authenticate({ authorizationHeader: `Bearer ${token}`, path: 'svc/data' }, options));
+    await assert.rejects(
+      authenticate({ authorizationHeader: `Bearer ${token}`, path: 'svc/admin' }, options),
+      ForbiddenError,
+    );
+    await assert.rejects(
+      authenticate({ authorizationHeader: `Bearer ${token}`, path: 'other/data' }, options),
+      ForbiddenError,
+    );
+  });
+
+  void it('prefers an exact top-level claim over a dotted path of the same name', async () => {
+    const token = await signHs256({ 'routes.whitelist': ['top/*'], routes: { whitelist: ['nested/*'] } });
+    const options = {
+      mode: 'jwt-hs256' as const,
+      secret: SECRET,
+      issuer: ISSUER,
+      paths: { whitelistClaim: 'routes.whitelist' },
+    };
+
+    assert.ok(await authenticate({ authorizationHeader: `Bearer ${token}`, path: 'top/x' }, options));
+    await assert.rejects(
+      authenticate({ authorizationHeader: `Bearer ${token}`, path: 'nested/x' }, options),
+      ForbiddenError,
+    );
+  });
+
+  void it('treats a missing dotted claim as unrestricted, like a missing top-level claim', async () => {
+    const token = await signHs256({ routes: 'not-an-object' });
+    const options = {
+      mode: 'jwt-hs256' as const,
+      secret: SECRET,
+      issuer: ISSUER,
+      paths: { whitelistClaim: 'routes.whitelist' },
+    };
+
+    assert.ok(await authenticate({ authorizationHeader: `Bearer ${token}`, path: 'svc/data' }, options));
+  });
+
   void it('prefers a 403 failure over a 401 across multiple strategies', async () => {
     const token = await signHs256();
     await assert.rejects(
